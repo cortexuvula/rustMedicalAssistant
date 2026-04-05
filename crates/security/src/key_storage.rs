@@ -1,1 +1,293 @@
-//! Stub - implemented in later tasks
+//! AES-256-GCM key storage with PBKDF2 key derivation.
+//!
+//! API keys are encrypted with a per-entry random nonce and stored in a
+//! JSON file.  The master cipher key is derived from either the
+//! `MEDICAL_ASSISTANT_MASTER_KEY` environment variable or the machine ID
+//! using PBKDF2-HMAC-SHA256 with 600 000 iterations.
+
+use aes_gcm::{
+    aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce,
+};
+use aes_gcm::aead::rand_core::RngCore;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use chrono::Utc;
+use pbkdf2::pbkdf2_hmac;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
+use std::path::{Path, PathBuf};
+
+use crate::{SecurityError, SecurityResult};
+use crate::machine_id::get_machine_id;
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const SALT_LENGTH: usize = 32;
+const NONCE_LENGTH: usize = 12;
+const PBKDF2_ITERATIONS: u32 = 600_000;
+const KEY_FILE_NAME: &str = "keys.json";
+const SALT_FILE_NAME: &str = "salt.bin";
+
+// ─── Data structures persisted to disk ────────────────────────────────────────
+
+/// One encrypted entry in the key file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredKey {
+    /// Base64-encoded nonce (12 bytes) concatenated with ciphertext.
+    encrypted: String,
+    /// ISO 8601 timestamp of when this key was stored.
+    stored_at: String,
+    /// First 8 hex chars of SHA-256(plaintext) for quick integrity hints.
+    key_hash: String,
+}
+
+/// The on-disk JSON structure: a map of provider name -> StoredKey.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct KeyFile {
+    keys: HashMap<String, StoredKey>,
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/// Manages encrypted storage of API keys for named providers.
+pub struct KeyStorage {
+    cipher: Aes256Gcm,
+    storage_path: PathBuf,
+}
+
+impl KeyStorage {
+    /// Open (or create) the key store located inside `config_dir`.
+    pub fn open(config_dir: &Path) -> SecurityResult<Self> {
+        std::fs::create_dir_all(config_dir)?;
+
+        let salt = load_or_create_salt(config_dir)?;
+        let master_key = derive_master_key(&salt)?;
+        let key = Key::<Aes256Gcm>::from_slice(&master_key);
+        let cipher = Aes256Gcm::new(key);
+
+        Ok(Self {
+            cipher,
+            storage_path: config_dir.join(KEY_FILE_NAME),
+        })
+    }
+
+    /// Encrypt `api_key` and store it under `provider`.
+    pub fn store_key(&self, provider: &str, api_key: &str) -> SecurityResult<()> {
+        let mut nonce_bytes = [0u8; NONCE_LENGTH];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = self
+            .cipher
+            .encrypt(nonce, api_key.as_bytes())
+            .map_err(|e| SecurityError::Encryption(e.to_string()))?;
+
+        // Store nonce || ciphertext as a single base64 blob.
+        let mut combined = Vec::with_capacity(NONCE_LENGTH + ciphertext.len());
+        combined.extend_from_slice(&nonce_bytes);
+        combined.extend_from_slice(&ciphertext);
+
+        let entry = StoredKey {
+            encrypted: STANDARD.encode(&combined),
+            stored_at: Utc::now().to_rfc3339(),
+            key_hash: key_hash_hex(api_key.as_bytes()),
+        };
+
+        let mut file = self.load_file()?;
+        file.keys.insert(provider.to_string(), entry);
+        self.save_file(&file)
+    }
+
+    /// Decrypt and return the key for `provider`, or `None` if not stored.
+    pub fn get_key(&self, provider: &str) -> SecurityResult<Option<String>> {
+        let file = self.load_file()?;
+        let Some(entry) = file.keys.get(provider) else {
+            return Ok(None);
+        };
+
+        let combined = STANDARD
+            .decode(&entry.encrypted)
+            .map_err(|e| SecurityError::Decryption(e.to_string()))?;
+
+        if combined.len() < NONCE_LENGTH {
+            return Err(SecurityError::InvalidFormat);
+        }
+
+        let (nonce_bytes, ciphertext) = combined.split_at(NONCE_LENGTH);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        let plaintext = self
+            .cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| SecurityError::Decryption(e.to_string()))?;
+
+        String::from_utf8(plaintext)
+            .map(Some)
+            .map_err(|e| SecurityError::Decryption(e.to_string()))
+    }
+
+    /// Remove the key for `provider`.  Returns `true` if it existed.
+    pub fn remove_key(&self, provider: &str) -> SecurityResult<bool> {
+        let mut file = self.load_file()?;
+        let existed = file.keys.remove(provider).is_some();
+        if existed {
+            self.save_file(&file)?;
+        }
+        Ok(existed)
+    }
+
+    /// List all stored provider names.
+    pub fn list_providers(&self) -> SecurityResult<Vec<String>> {
+        let file = self.load_file()?;
+        Ok(file.keys.keys().cloned().collect())
+    }
+
+    // ─── Internal helpers ─────────────────────────────────────────────────────
+
+    fn load_file(&self) -> SecurityResult<KeyFile> {
+        if !self.storage_path.exists() {
+            return Ok(KeyFile::default());
+        }
+        let bytes = std::fs::read(&self.storage_path)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| SecurityError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+    }
+
+    fn save_file(&self, key_file: &KeyFile) -> SecurityResult<()> {
+        let json = serde_json::to_vec_pretty(key_file)
+            .map_err(|e| SecurityError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        std::fs::write(&self.storage_path, json)?;
+        Ok(())
+    }
+}
+
+// ─── Key derivation ───────────────────────────────────────────────────────────
+
+/// Derives the 32-byte master key from the salt using PBKDF2-HMAC-SHA256.
+///
+/// The password is taken from the `MEDICAL_ASSISTANT_MASTER_KEY` env var when
+/// set, otherwise the machine ID is used.
+fn derive_master_key(salt: &[u8]) -> SecurityResult<[u8; 32]> {
+    let password = std::env::var("MEDICAL_ASSISTANT_MASTER_KEY")
+        .unwrap_or_else(|_| get_machine_id().unwrap_or_else(|_| "fallback".to_string()));
+
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+    Ok(key)
+}
+
+/// Load an existing salt or create and persist a new random one.
+fn load_or_create_salt(config_dir: &Path) -> SecurityResult<Vec<u8>> {
+    let path = config_dir.join(SALT_FILE_NAME);
+    if path.exists() {
+        return Ok(std::fs::read(&path)?);
+    }
+    let mut salt = vec![0u8; SALT_LENGTH];
+    rand::thread_rng().fill_bytes(&mut salt);
+    std::fs::write(&path, &salt)?;
+    Ok(salt)
+}
+
+// ─── Utility ──────────────────────────────────────────────────────────────────
+
+/// Returns the first 8 hex characters of SHA-256(data).
+fn key_hash_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    let mut hex = String::with_capacity(8);
+    for byte in &result[..4] {
+        write!(hex, "{:02x}", byte).expect("infallible");
+    }
+    hex
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn open_temp_store() -> (TempDir, KeyStorage) {
+        let dir = TempDir::new().unwrap();
+        let ks = KeyStorage::open(dir.path()).unwrap();
+        (dir, ks)
+    }
+
+    #[test]
+    fn store_and_retrieve() {
+        let (_dir, ks) = open_temp_store();
+        ks.store_key("openai", "sk-test-1234").unwrap();
+        let val = ks.get_key("openai").unwrap();
+        assert_eq!(val, Some("sk-test-1234".to_string()));
+    }
+
+    #[test]
+    fn get_nonexistent_none() {
+        let (_dir, ks) = open_temp_store();
+        assert_eq!(ks.get_key("does_not_exist").unwrap(), None);
+    }
+
+    #[test]
+    fn overwrite_key() {
+        let (_dir, ks) = open_temp_store();
+        ks.store_key("provider", "first_key").unwrap();
+        ks.store_key("provider", "second_key").unwrap();
+        assert_eq!(ks.get_key("provider").unwrap(), Some("second_key".to_string()));
+    }
+
+    #[test]
+    fn remove_key() {
+        let (_dir, ks) = open_temp_store();
+        ks.store_key("anthropic", "sk-ant-123").unwrap();
+        assert!(ks.remove_key("anthropic").unwrap());
+        assert_eq!(ks.get_key("anthropic").unwrap(), None);
+    }
+
+    #[test]
+    fn remove_nonexistent_false() {
+        let (_dir, ks) = open_temp_store();
+        assert!(!ks.remove_key("ghost").unwrap());
+    }
+
+    #[test]
+    fn list_providers() {
+        let (_dir, ks) = open_temp_store();
+        ks.store_key("openai", "a").unwrap();
+        ks.store_key("anthropic", "b").unwrap();
+        let mut providers = ks.list_providers().unwrap();
+        providers.sort();
+        assert_eq!(providers, vec!["anthropic", "openai"]);
+    }
+
+    #[test]
+    fn salt_persists_across_instances() {
+        let dir = TempDir::new().unwrap();
+        {
+            let ks = KeyStorage::open(dir.path()).unwrap();
+            ks.store_key("svc", "my_secret").unwrap();
+        }
+        {
+            let ks2 = KeyStorage::open(dir.path()).unwrap();
+            let val = ks2.get_key("svc").unwrap();
+            assert_eq!(val, Some("my_secret".to_string()));
+        }
+    }
+
+    #[test]
+    fn different_nonces_per_encryption() {
+        let (_dir, ks) = open_temp_store();
+        ks.store_key("p1", "same_value").unwrap();
+        ks.store_key("p2", "same_value").unwrap();
+
+        let file = ks.load_file().unwrap();
+        let enc1 = &file.keys["p1"].encrypted;
+        let enc2 = &file.keys["p2"].encrypted;
+        // Even for the same plaintext the nonces differ, so ciphertexts differ.
+        assert_ne!(enc1, enc2);
+    }
+}
