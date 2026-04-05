@@ -1,1 +1,173 @@
-//! Stub - implemented in later tasks
+//! PHI/PII redactor using regular-expression pattern matching.
+//!
+//! `PhiRedactor::redact` replaces sensitive tokens with bracketed placeholders
+//! such as `[SSN]`, `[PHONE]`, `[EMAIL]`, etc.
+
+use lazy_static::lazy_static;
+use regex::Regex;
+
+// ─── Pattern definitions ──────────────────────────────────────────────────────
+
+struct RedactionPattern {
+    regex: Regex,
+    placeholder: &'static str,
+}
+
+lazy_static! {
+    static ref PATTERNS: Vec<RedactionPattern> = {
+        let defs: &[(&str, &'static str)] = &[
+            // Social Security Number: 123-45-6789 or 123456789
+            (r"\b\d{3}-?\d{2}-?\d{4}\b", "[SSN]"),
+            // Phone numbers (US-centric, optional country code)
+            (
+                r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
+                "[PHONE]",
+            ),
+            // E-mail addresses
+            (
+                r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b",
+                "[EMAIL]",
+            ),
+            // Date of birth with keyword prefix
+            (
+                r"(?i)\b(?:DOB|Date\s+of\s+Birth|Born|D\.O\.B\.?)\s*:?\s*\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b",
+                "[DOB]",
+            ),
+            // Medical record number with keyword prefix
+            (
+                r"(?i)\b(?:MRN|Medical\s+Record|Record\s*#?|Chart\s*#?)\s*:?\s*[A-Z0-9\-]{4,20}\b",
+                "[MRN]",
+            ),
+            // Street addresses: "123 Main Street", "456 Oak Ave", etc.
+            (
+                r"\b\d{1,5}\s+[A-Za-z]+(?:\s+[A-Za-z]+)*\s+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Ln|Lane|Rd|Road|Ct|Court|Way|Pl|Place)\.?\b",
+                "[ADDRESS]",
+            ),
+            // US ZIP codes: 12345 or 12345-6789
+            (r"\b\d{5}(?:-\d{4})?\b", "[ZIP]"),
+        ];
+
+        defs.iter()
+            .map(|(pat, placeholder)| RedactionPattern {
+                regex: Regex::new(pat)
+                    .unwrap_or_else(|e| panic!("Invalid PHI regex `{}`: {}", pat, e)),
+                placeholder,
+            })
+            .collect()
+    };
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+/// Redacts PHI/PII from text.
+pub struct PhiRedactor;
+
+impl PhiRedactor {
+    /// Create a new redactor instance.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Replace all detected PHI tokens in `text` with bracketed placeholders.
+    ///
+    /// Patterns are applied in order (SSN → PHONE → … → ZIP), so a more
+    /// specific pattern wins if it matches first.
+    pub fn redact(text: &str) -> String {
+        let mut result = text.to_string();
+        for pattern in PATTERNS.iter() {
+            let replaced = pattern
+                .regex
+                .replace_all(&result, pattern.placeholder)
+                .into_owned();
+            result = replaced;
+        }
+        result
+    }
+
+    /// Returns `true` if `text` contains at least one PHI token.
+    pub fn contains_phi(text: &str) -> bool {
+        PATTERNS.iter().any(|p| p.regex.is_match(text))
+    }
+}
+
+impl Default for PhiRedactor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_ssn() {
+        assert_eq!(PhiRedactor::redact("SSN: 123-45-6789"), "SSN: [SSN]");
+        assert_eq!(PhiRedactor::redact("id 123456789 here"), "id [SSN] here");
+    }
+
+    #[test]
+    fn redacts_phone() {
+        let out = PhiRedactor::redact("Call me at 555-867-5309");
+        assert!(out.contains("[PHONE]"), "got: {}", out);
+        let out2 = PhiRedactor::redact("(800) 555-1234 is the number");
+        assert!(out2.contains("[PHONE]"), "got: {}", out2);
+    }
+
+    #[test]
+    fn redacts_email() {
+        let out = PhiRedactor::redact("Contact john.doe@example.com for help");
+        assert!(out.contains("[EMAIL]"), "got: {}", out);
+        assert!(!out.contains("john.doe@example.com"), "got: {}", out);
+    }
+
+    #[test]
+    fn redacts_dob() {
+        let out = PhiRedactor::redact("DOB: 01/15/1985");
+        assert!(out.contains("[DOB]"), "got: {}", out);
+        let out2 = PhiRedactor::redact("Date of Birth: 3-22-1990");
+        assert!(out2.contains("[DOB]"), "got: {}", out2);
+    }
+
+    #[test]
+    fn redacts_mrn() {
+        let out = PhiRedactor::redact("MRN: ABC1234567");
+        assert!(out.contains("[MRN]"), "got: {}", out);
+        let out2 = PhiRedactor::redact("Chart #: XYZ-9876");
+        assert!(out2.contains("[MRN]"), "got: {}", out2);
+    }
+
+    #[test]
+    fn redacts_address() {
+        let out = PhiRedactor::redact("lives at 123 Main Street in the city");
+        assert!(out.contains("[ADDRESS]"), "got: {}", out);
+        let out2 = PhiRedactor::redact("Sent to 45 Oak Ave");
+        assert!(out2.contains("[ADDRESS]"), "got: {}", out2);
+    }
+
+    #[test]
+    fn contains_phi_detects() {
+        assert!(PhiRedactor::contains_phi("SSN is 123-45-6789"));
+        assert!(PhiRedactor::contains_phi("email: foo@bar.com"));
+        assert!(!PhiRedactor::contains_phi("Hello, world!"));
+    }
+
+    #[test]
+    fn preserves_non_phi() {
+        let text = "The patient is feeling well today.";
+        assert_eq!(PhiRedactor::redact(text), text);
+    }
+
+    #[test]
+    fn handles_multiple_patterns() {
+        let text = "Patient john@example.com, SSN 123-45-6789, DOB 01/01/1990";
+        let out = PhiRedactor::redact(text);
+        assert!(out.contains("[EMAIL]"), "got: {}", out);
+        assert!(out.contains("[SSN]"), "got: {}", out);
+        assert!(out.contains("[DOB]"), "got: {}", out);
+        assert!(!out.contains("john@example.com"), "got: {}", out);
+        assert!(!out.contains("123-45-6789"), "got: {}", out);
+    }
+}
