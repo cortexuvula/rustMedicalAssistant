@@ -11,36 +11,32 @@ use super::agent::AgentSettings;
 /// UI theme preference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Theme {
     Dark,
+    #[default]
     Light,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Theme::Light
-    }
-}
 
 /// ICD coding version used when generating SOAP notes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum IcdVersion {
+    #[default]
     Icd9,
     Icd10,
     Both,
 }
 
-impl Default for IcdVersion {
-    fn default() -> Self {
-        IcdVersion::Icd9
-    }
-}
 
 /// The SOAP note template style.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SoapTemplate {
+    #[default]
     FollowUp,
     NewPatient,
     Telehealth,
@@ -49,11 +45,6 @@ pub enum SoapTemplate {
     Geriatric,
 }
 
-impl Default for SoapTemplate {
-    fn default() -> Self {
-        SoapTemplate::FollowUp
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SoapNoteSettings

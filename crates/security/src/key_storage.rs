@@ -158,7 +158,7 @@ impl KeyStorage {
 
     fn save_file(&self, key_file: &KeyFile) -> SecurityResult<()> {
         let json = serde_json::to_vec_pretty(key_file)
-            .map_err(|e| SecurityError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| SecurityError::Io(std::io::Error::other(e)))?;
         std::fs::write(&self.storage_path, json)?;
         Ok(())
     }

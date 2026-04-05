@@ -5,17 +5,14 @@ use uuid::Uuid;
 /// Relative priority for queue tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Priority {
     Low,
+    #[default]
     Normal,
     High,
 }
 
-impl Default for Priority {
-    fn default() -> Self {
-        Priority::Normal
-    }
-}
 
 impl Priority {
     /// Returns a signed integer representation suitable for ordering queries.

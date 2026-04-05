@@ -64,7 +64,7 @@ impl RecordingsRepo {
              FROM recordings
              WHERE id = ?1",
             [&id_str],
-            |row| Self::row_to_recording(row),
+            Self::row_to_recording,
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => {
