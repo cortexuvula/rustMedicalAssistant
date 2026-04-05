@@ -9,7 +9,11 @@ pub mod search;
 pub mod vectors;
 pub mod graph;
 
+use std::path::Path;
+
 use thiserror::Error;
+
+pub use pool::{DbPool, PooledConnection};
 
 #[derive(Error, Debug)]
 pub enum DbError {
@@ -26,3 +30,106 @@ pub enum DbError {
 }
 
 pub type DbResult<T> = Result<T, DbError>;
+
+// ---------------------------------------------------------------------------
+// Database facade
+// ---------------------------------------------------------------------------
+
+/// Top-level handle that owns the connection pool and exposes a convenience
+/// API for the rest of the application.
+pub struct Database {
+    pool: DbPool,
+}
+
+impl Database {
+    /// Open (or create) a file-backed database, running all pending migrations.
+    pub fn open(db_path: &Path) -> DbResult<Self> {
+        let pool = pool::create_pool(db_path)?;
+        {
+            let conn = pool.get().map_err(DbError::Pool)?;
+            migrations::MigrationEngine::migrate(&conn)?;
+        }
+        Ok(Self { pool })
+    }
+
+    /// Open an in-memory database and run all migrations.  Primarily useful in
+    /// tests and for ephemeral workloads.
+    pub fn open_in_memory() -> DbResult<Self> {
+        let pool = pool::create_memory_pool()?;
+        {
+            let conn = pool.get().map_err(DbError::Pool)?;
+            migrations::MigrationEngine::migrate(&conn)?;
+        }
+        Ok(Self { pool })
+    }
+
+    /// Check out a pooled connection.
+    pub fn conn(&self) -> DbResult<PooledConnection> {
+        self.pool.get().map_err(DbError::Pool)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn opens_in_memory() {
+        let db = Database::open_in_memory().expect("open in-memory");
+        let conn = db.conn().expect("conn");
+        let v: i64 = conn
+            .query_row("SELECT 1", [], |r| r.get(0))
+            .expect("query");
+        assert_eq!(v, 1);
+    }
+
+    #[test]
+    fn opens_file() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("app.db");
+        let db = Database::open(&db_path).expect("open file db");
+        let conn = db.conn().expect("conn");
+        // Migrations should have run — check that the recordings table exists.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='recordings'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn full_workflow() {
+        use crate::audit::AuditRepo;
+        use crate::recordings::RecordingsRepo;
+        use crate::settings::SettingsRepo;
+        use medical_core::types::recording::Recording;
+
+        let db = Database::open_in_memory().expect("db");
+        let conn = db.conn().expect("conn");
+
+        // Insert a recording
+        let rec = Recording::new("workflow.wav", PathBuf::from("/audio/workflow.wav"));
+        RecordingsRepo::insert(&conn, &rec).expect("insert recording");
+
+        // Save a setting
+        SettingsRepo::set(&conn, "test_key", "test_value").expect("set setting");
+        let val = SettingsRepo::get(&conn, "test_key")
+            .expect("get setting")
+            .expect("value present");
+        assert_eq!(val, "test_value");
+
+        // Write an audit entry
+        let id = AuditRepo::append(&conn, "insert", "system", "recording", None)
+            .expect("audit append");
+        assert!(id > 0);
+
+        // Verify everything is queryable
+        assert_eq!(RecordingsRepo::count(&conn).expect("count"), 1);
+        assert_eq!(AuditRepo::count(&conn).expect("count"), 1);
+    }
+}
