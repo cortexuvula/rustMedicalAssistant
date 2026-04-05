@@ -1,1 +1,515 @@
-//! Stub — implemented in later tasks
+//! Base client for any OpenAI-compatible chat-completions endpoint.
+
+use std::pin::Pin;
+
+use futures_core::Stream;
+use futures_util::StreamExt;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+use medical_core::{
+    error::{AppError, AppResult},
+    types::{
+        CompletionRequest, CompletionResponse, MessageContent, Role, StreamChunk,
+        ToolCall, ToolCompletionResponse, ToolDef, UsageInfo,
+    },
+};
+
+use crate::sse::parse_sse_response;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Internal serde types
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct ChatRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ApiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ChatMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ApiToolCall>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ApiToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    function: ApiFunction,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ApiFunction {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ApiToolCallDelta {
+    index: Option<usize>,
+    id: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    function: Option<ApiFunctionDelta>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ApiFunctionDelta {
+    name: Option<String>,
+    arguments: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiTool {
+    #[serde(rename = "type")]
+    kind: String,
+    function: ApiToolDef,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiToolDef {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatResponse {
+    model: Option<String>,
+    choices: Vec<ChatChoice>,
+    usage: Option<ApiUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatChoice {
+    message: Option<ChatResponseMessage>,
+    delta: Option<ChatDelta>,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatResponseMessage {
+    content: Option<String>,
+    tool_calls: Option<Vec<ApiToolCall>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatDelta {
+    content: Option<String>,
+    tool_calls: Option<Vec<ApiToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    total_tokens: u32,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// OpenAiCompatibleClient
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A client for any endpoint implementing the OpenAI chat-completions protocol.
+pub struct OpenAiCompatibleClient {
+    pub client: Client,
+    pub base_url: String,
+}
+
+impl OpenAiCompatibleClient {
+    pub fn new(client: Client, base_url: impl Into<String>) -> Self {
+        Self {
+            client,
+            base_url: base_url.into(),
+        }
+    }
+
+    fn build_request(&self, request: &CompletionRequest) -> ChatRequest {
+        let mut messages: Vec<ChatMessage> = Vec::new();
+
+        // Inject system prompt as first message if present
+        if let Some(sys) = &request.system_prompt {
+            messages.push(ChatMessage {
+                role: "system".into(),
+                content: Some(serde_json::Value::String(sys.clone())),
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
+
+        for msg in &request.messages {
+            let role = match msg.role {
+                Role::System => "system",
+                Role::User => "user",
+                Role::Assistant => "assistant",
+                Role::Tool => "tool",
+            };
+            match &msg.content {
+                MessageContent::Text(text) => {
+                    messages.push(ChatMessage {
+                        role: role.into(),
+                        content: Some(serde_json::Value::String(text.clone())),
+                        tool_call_id: None,
+                        tool_calls: None,
+                    });
+                }
+                MessageContent::ToolResult {
+                    tool_call_id,
+                    content,
+                } => {
+                    messages.push(ChatMessage {
+                        role: "tool".into(),
+                        content: Some(serde_json::Value::String(content.clone())),
+                        tool_call_id: Some(tool_call_id.clone()),
+                        tool_calls: None,
+                    });
+                }
+            }
+        }
+
+        ChatRequest {
+            model: request.model.clone(),
+            messages,
+            temperature: request.temperature,
+            max_tokens: request.max_tokens,
+            stream: None,
+            tools: None,
+            stream_options: None,
+        }
+    }
+
+    fn parse_response(
+        &self,
+        resp: ChatResponse,
+        default_model: &str,
+    ) -> CompletionResponse {
+        let model = resp.model.unwrap_or_else(|| default_model.to_string());
+        let usage = resp.usage.map(|u| UsageInfo {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens,
+        }).unwrap_or_default();
+
+        let first_choice = resp.choices.into_iter().next();
+
+        let content = first_choice
+            .as_ref()
+            .and_then(|c| c.message.as_ref())
+            .and_then(|m| m.content.clone())
+            .unwrap_or_default();
+
+        let tool_calls = first_choice
+            .as_ref()
+            .and_then(|c| c.message.as_ref())
+            .and_then(|m| m.tool_calls.as_ref())
+            .map(|tcs| {
+                tcs.iter()
+                    .map(|tc| ToolCall {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                        arguments: serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or(serde_json::Value::Null),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        CompletionResponse {
+            content,
+            model,
+            usage,
+            tool_calls,
+        }
+    }
+
+    pub async fn complete(&self, request: &CompletionRequest) -> AppResult<CompletionResponse> {
+        let url = format!("{}/chat/completions", self.base_url);
+        let body = self.build_request(request);
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        }
+
+        let resp: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        Ok(self.parse_response(resp, &request.model))
+    }
+
+    pub async fn complete_stream(
+        &self,
+        request: &CompletionRequest,
+    ) -> AppResult<Pin<Box<dyn Stream<Item = AppResult<StreamChunk>> + Send>>> {
+        let url = format!("{}/chat/completions", self.base_url);
+        let mut body = self.build_request(request);
+        body.stream = Some(true);
+        body.stream_options = Some(StreamOptions { include_usage: true });
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        }
+
+        let sse = parse_sse_response(response);
+
+        // Convert each SSE data line into zero or more StreamChunks.
+        let mapped = sse
+            .map(|item| -> Vec<AppResult<StreamChunk>> {
+                match item {
+                    Err(e) => vec![Err(AppError::AiProvider(e))],
+                    Ok(data) => {
+                        match serde_json::from_str::<ChatResponse>(&data) {
+                            Err(_) => vec![],
+                            Ok(resp) => {
+                                let mut out = Vec::new();
+                                if let Some(choice) = resp.choices.first() {
+                                    if let Some(delta) = &choice.delta {
+                                        // Text delta
+                                        if let Some(text) = &delta.content {
+                                            if !text.is_empty() {
+                                                out.push(Ok(StreamChunk::Delta {
+                                                    text: text.clone(),
+                                                }));
+                                            }
+                                        }
+                                        // Tool-call deltas
+                                        if let Some(tc_deltas) = &delta.tool_calls {
+                                            for tc in tc_deltas {
+                                                let id = tc.id.clone().unwrap_or_default();
+                                                let name = tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.name.clone());
+                                                let args_delta = tc
+                                                    .function
+                                                    .as_ref()
+                                                    .and_then(|f| f.arguments.clone())
+                                                    .unwrap_or_default();
+                                                out.push(Ok(StreamChunk::ToolCallDelta {
+                                                    id,
+                                                    name,
+                                                    arguments_delta: args_delta,
+                                                }));
+                                            }
+                                        }
+                                    }
+                                }
+                                // Usage chunk (comes in a separate SSE event with usage data)
+                                if let Some(u) = resp.usage {
+                                    out.push(Ok(StreamChunk::Usage(UsageInfo {
+                                        prompt_tokens: u.prompt_tokens,
+                                        completion_tokens: u.completion_tokens,
+                                        total_tokens: u.total_tokens,
+                                    })));
+                                    out.push(Ok(StreamChunk::Done));
+                                }
+                                out
+                            }
+                        }
+                    }
+                }
+            })
+            .flat_map(tokio_stream::iter);
+
+        Ok(Box::pin(mapped))
+    }
+
+    pub async fn complete_with_tools(
+        &self,
+        request: &CompletionRequest,
+        tools: Vec<ToolDef>,
+    ) -> AppResult<ToolCompletionResponse> {
+        let url = format!("{}/chat/completions", self.base_url);
+        let mut body = self.build_request(request);
+        body.tools = Some(
+            tools
+                .into_iter()
+                .map(|t| ApiTool {
+                    kind: "function".into(),
+                    function: ApiToolDef {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    },
+                })
+                .collect(),
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        }
+
+        let resp: ChatResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        let usage = resp.usage.map(|u| UsageInfo {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens,
+        }).unwrap_or_default();
+
+        let first_choice = resp.choices.into_iter().next();
+
+        let content = first_choice
+            .as_ref()
+            .and_then(|c| c.message.as_ref())
+            .and_then(|m| m.content.clone());
+
+        let tool_calls = first_choice
+            .as_ref()
+            .and_then(|c| c.message.as_ref())
+            .and_then(|m| m.tool_calls.as_ref())
+            .map(|tcs| {
+                tcs.iter()
+                    .map(|tc| ToolCall {
+                        id: tc.id.clone(),
+                        name: tc.function.name.clone(),
+                        arguments: serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or(serde_json::Value::Null),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(ToolCompletionResponse {
+            content,
+            tool_calls,
+            usage,
+        })
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use medical_core::types::{Message, MessageContent, Role};
+
+    fn make_client() -> OpenAiCompatibleClient {
+        // Build without real auth — only used for struct-level tests.
+        OpenAiCompatibleClient::new(Client::new(), "https://api.openai.com/v1")
+    }
+
+    fn make_request() -> CompletionRequest {
+        CompletionRequest {
+            model: "gpt-4o".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: MessageContent::Text("Hello".into()),
+            }],
+            temperature: None,
+            max_tokens: None,
+            system_prompt: Some("You are a helpful assistant.".into()),
+        }
+    }
+
+    #[test]
+    fn build_request_includes_system_prompt() {
+        let c = make_client();
+        let req = make_request();
+        let chat_req = c.build_request(&req);
+        assert_eq!(chat_req.messages[0].role, "system");
+        assert_eq!(
+            chat_req.messages[0].content,
+            Some(serde_json::Value::String(
+                "You are a helpful assistant.".into()
+            ))
+        );
+        assert_eq!(chat_req.messages[1].role, "user");
+    }
+
+    #[test]
+    fn stream_flag() {
+        let c = make_client();
+        let req = make_request();
+        let mut chat_req = c.build_request(&req);
+        assert!(chat_req.stream.is_none());
+        chat_req.stream = Some(true);
+        assert_eq!(chat_req.stream, Some(true));
+    }
+
+    #[test]
+    fn parse_response_extracts_content() {
+        let c = make_client();
+        let resp = ChatResponse {
+            model: Some("gpt-4o".into()),
+            choices: vec![ChatChoice {
+                message: Some(ChatResponseMessage {
+                    content: Some("The answer is 42.".into()),
+                    tool_calls: None,
+                }),
+                delta: None,
+                finish_reason: Some("stop".into()),
+            }],
+            usage: Some(ApiUsage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+            }),
+        };
+        let completion = c.parse_response(resp, "gpt-4o");
+        assert_eq!(completion.content, "The answer is 42.");
+        assert_eq!(completion.model, "gpt-4o");
+        assert_eq!(completion.usage.total_tokens, 15);
+        assert!(completion.tool_calls.is_empty());
+    }
+}
