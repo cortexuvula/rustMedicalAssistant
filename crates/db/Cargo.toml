@@ -1,0 +1,21 @@
+[package]
+name = "medical-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+medical-core = { path = "../core" }
+rusqlite = { version = "0.32", features = ["bundled", "vtab", "functions"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1"
