@@ -1,5 +1,7 @@
 //! Base client for any OpenAI-compatible chat-completions endpoint.
 
+#![allow(dead_code)]
+
 use std::pin::Pin;
 
 use futures_core::Stream;
