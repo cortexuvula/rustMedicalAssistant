@@ -14,6 +14,9 @@
 # Superpowers brainstorming
 .superpowers/
 
+# Remember plugin
+.remember/
+
 # OS
 .DS_Store
 Thumbs.db
