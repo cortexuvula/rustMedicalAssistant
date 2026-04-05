@@ -325,13 +325,12 @@ impl AiProvider for AnthropicProvider {
                                         if let Some(delta) = &event.delta {
                                             match delta.kind.as_deref() {
                                                 Some("text_delta") => {
-                                                    if let Some(text) = &delta.text {
-                                                        if !text.is_empty() {
+                                                    if let Some(text) = &delta.text
+                                                        && !text.is_empty() {
                                                             out.push(Ok(StreamChunk::Delta {
                                                                 text: text.clone(),
                                                             }));
                                                         }
-                                                    }
                                                 }
                                                 Some("input_json_delta") => {
                                                     if let Some(args) = &delta.partial_json {
@@ -347,8 +346,8 @@ impl AiProvider for AnthropicProvider {
                                         }
                                     }
                                     "message_delta" => {
-                                        if let Some(delta) = &event.delta {
-                                            if let Some(usage) = &delta.usage {
+                                        if let Some(delta) = &event.delta
+                                            && let Some(usage) = &delta.usage {
                                                 out.push(Ok(StreamChunk::Usage(UsageInfo {
                                                     prompt_tokens: usage.input_tokens,
                                                     completion_tokens: usage.output_tokens,
@@ -356,7 +355,6 @@ impl AiProvider for AnthropicProvider {
                                                         + usage.output_tokens,
                                                 })));
                                             }
-                                        }
                                         // Also check top-level usage
                                         if let Some(usage) = &event.usage {
                                             out.push(Ok(StreamChunk::Usage(UsageInfo {

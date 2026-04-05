@@ -308,16 +308,15 @@ impl OpenAiCompatibleClient {
                             Err(_) => vec![],
                             Ok(resp) => {
                                 let mut out = Vec::new();
-                                if let Some(choice) = resp.choices.first() {
-                                    if let Some(delta) = &choice.delta {
+                                if let Some(choice) = resp.choices.first()
+                                    && let Some(delta) = &choice.delta {
                                         // Text delta
-                                        if let Some(text) = &delta.content {
-                                            if !text.is_empty() {
+                                        if let Some(text) = &delta.content
+                                            && !text.is_empty() {
                                                 out.push(Ok(StreamChunk::Delta {
                                                     text: text.clone(),
                                                 }));
                                             }
-                                        }
                                         // Tool-call deltas
                                         if let Some(tc_deltas) = &delta.tool_calls {
                                             for tc in tc_deltas {
@@ -339,7 +338,6 @@ impl OpenAiCompatibleClient {
                                             }
                                         }
                                     }
-                                }
                                 // Usage chunk (comes in a separate SSE event with usage data)
                                 if let Some(u) = resp.usage {
                                     out.push(Ok(StreamChunk::Usage(UsageInfo {

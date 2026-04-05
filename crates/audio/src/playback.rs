@@ -47,7 +47,7 @@ impl Player {
     /// Open `path`, decode it, append it to the sink, and start playing.
     pub fn play_file(&self, path: &Path) -> AudioResult<()> {
         let file = File::open(path)
-            .map_err(|e| AudioError::Io(e))?;
+            .map_err(AudioError::Io)?;
         let source = Decoder::new(BufReader::new(file))
             .map_err(|e| AudioError::Playback(e.to_string()))?;
         self.sink.append(source);

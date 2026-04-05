@@ -17,6 +17,12 @@ pub struct ProviderRegistry {
     active: String,
 }
 
+impl Default for ProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProviderRegistry {
     pub fn new() -> Self {
         Self { providers: HashMap::new(), active: String::new() }

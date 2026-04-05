@@ -2509,6 +2509,7 @@ dependencies = [
  "bytes",
  "eventsource-stream",
  "futures-core",
+ "futures-util",
  "medical-core",
  "reqwest 0.12.28",
  "serde",
@@ -2598,6 +2599,7 @@ name = "medical-stt-providers"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-core",
  "hound",
  "medical-core",
  "reqwest 0.12.28",
