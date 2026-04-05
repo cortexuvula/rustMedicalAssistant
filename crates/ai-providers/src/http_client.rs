@@ -1,1 +1,165 @@
-//! Stub — implemented in later tasks
+//! Shared HTTP client infrastructure with retry and circuit-breaker support.
+
+use std::time::{Duration, Instant};
+use reqwest::{Client, header};
+
+/// Build a reqwest client with Bearer-token auth.
+pub fn build_client(api_key: &str, timeout_secs: u64) -> reqwest::Result<Client> {
+    let mut auth_value =
+        header::HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap_or_else(|_| {
+            header::HeaderValue::from_static("Bearer invalid")
+        });
+    auth_value.set_sensitive(true);
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, auth_value);
+
+    Client::builder()
+        .default_headers(headers)
+        .pool_max_idle_per_host(5)
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+}
+
+/// Build a reqwest client with a custom auth header.
+pub fn build_client_custom_auth(
+    header_name: &str,
+    api_key: &str,
+    timeout_secs: u64,
+) -> reqwest::Result<Client> {
+    let header_name = header::HeaderName::from_bytes(header_name.as_bytes())
+        .unwrap_or_else(|_| header::HeaderName::from_static("x-api-key"));
+
+    let mut header_value = header::HeaderValue::from_str(api_key).unwrap_or_else(|_| {
+        header::HeaderValue::from_static("invalid")
+    });
+    header_value.set_sensitive(true);
+
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header_name, header_value);
+
+    Client::builder()
+        .default_headers(headers)
+        .pool_max_idle_per_host(5)
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+}
+
+/// Configuration for exponential-backoff retry logic.
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    pub max_retries: u32,
+    pub initial_delay: Duration,
+    pub backoff_factor: f64,
+    pub max_delay: Duration,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_secs(1),
+            backoff_factor: 2.0,
+            max_delay: Duration::from_secs(30),
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Return the delay to wait before `attempt` (0-indexed).
+    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
+        let millis = self.initial_delay.as_millis() as f64
+            * self.backoff_factor.powi(attempt as i32);
+        let capped = millis.min(self.max_delay.as_millis() as f64) as u64;
+        Duration::from_millis(capped)
+    }
+}
+
+/// Simple circuit breaker.
+#[derive(Debug)]
+pub struct CircuitBreaker {
+    pub failure_count: u32,
+    pub failure_threshold: u32,
+    pub last_failure: Option<Instant>,
+    pub recovery_timeout: Duration,
+}
+
+impl CircuitBreaker {
+    pub fn new(failure_threshold: u32, recovery_timeout: Duration) -> Self {
+        Self {
+            failure_count: 0,
+            failure_threshold,
+            last_failure: None,
+            recovery_timeout,
+        }
+    }
+
+    /// Returns `true` when the breaker is open (circuit broken, reject requests).
+    pub fn is_open(&self) -> bool {
+        if self.failure_count < self.failure_threshold {
+            return false;
+        }
+        match self.last_failure {
+            None => false,
+            Some(t) => t.elapsed() < self.recovery_timeout,
+        }
+    }
+
+    pub fn record_success(&mut self) {
+        self.failure_count = 0;
+        self.last_failure = None;
+    }
+
+    pub fn record_failure(&mut self) {
+        self.failure_count += 1;
+        self.last_failure = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exponential_backoff() {
+        let cfg = RetryConfig::default();
+        assert_eq!(cfg.delay_for_attempt(0), Duration::from_secs(1));
+        assert_eq!(cfg.delay_for_attempt(1), Duration::from_secs(2));
+        assert_eq!(cfg.delay_for_attempt(2), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn caps_at_max() {
+        let cfg = RetryConfig::default();
+        // attempt 10: 1 * 2^10 = 1024 s, capped at 30 s
+        assert_eq!(cfg.delay_for_attempt(10), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn cb_starts_closed() {
+        let cb = CircuitBreaker::new(3, Duration::from_secs(60));
+        assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn cb_opens_after_threshold() {
+        let mut cb = CircuitBreaker::new(3, Duration::from_secs(60));
+        cb.record_failure();
+        cb.record_failure();
+        cb.record_failure();
+        assert!(cb.is_open());
+    }
+
+    #[test]
+    fn cb_resets_on_success() {
+        let mut cb = CircuitBreaker::new(3, Duration::from_secs(60));
+        cb.record_failure();
+        cb.record_failure();
+        cb.record_failure();
+        assert!(cb.is_open());
+        cb.record_success();
+        assert!(!cb.is_open());
+    }
+}
