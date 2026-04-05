@@ -23,3 +23,7 @@ serde_json = { workspace = true }
 medical-core = { path = "../crates/core" }
 medical-db = { path = "../crates/db" }
 medical-security = { path = "../crates/security" }
+medical-audio = { path = "../crates/audio" }
+medical-ai-providers = { path = "../crates/ai-providers" }
+medical-stt-providers = { path = "../crates/stt-providers" }
+medical-tts-providers = { path = "../crates/tts-providers" }

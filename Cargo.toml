@@ -4,6 +4,10 @@ members = [
     "crates/core",
     "crates/db",
     "crates/security",
+    "crates/audio",
+    "crates/ai-providers",
+    "crates/stt-providers",
+    "crates/tts-providers",
     "src-tauri",
 ]
 
@@ -32,3 +36,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 async-trait = "0.1"
 futures-core = "0.3"
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+eventsource-stream = "0.2"
+tokio-stream = "0.1"
+bytes = "1"
