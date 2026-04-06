@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use medical_core::{
     error::{AppError, AppResult},
     types::{
-        CompletionRequest, CompletionResponse, MessageContent, Role, StreamChunk,
+        CompletionRequest, CompletionResponse, Message, MessageContent, Role, StreamChunk,
         ToolCall, ToolCompletionResponse, ToolDef, UsageInfo,
     },
 };
@@ -149,6 +149,65 @@ impl OpenAiCompatibleClient {
         }
     }
 
+    /// Convert a core `Message` into the OpenAI wire format (`ChatMessage`).
+    /// For assistant messages that carry `tool_calls`, we include them so that
+    /// subsequent `tool` role messages can reference the tool_call_id.
+    fn convert_message(msg: &Message) -> ChatMessage {
+        let role = match msg.role {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::Tool => "tool",
+        };
+
+        match &msg.content {
+            MessageContent::Text(text) => {
+                // For assistant messages with tool_calls, the content may be null/empty
+                // and the tool_calls must be forwarded.
+                let api_tool_calls: Option<Vec<ApiToolCall>> = if msg.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(
+                        msg.tool_calls
+                            .iter()
+                            .map(|tc| ApiToolCall {
+                                id: tc.id.clone(),
+                                kind: "function".into(),
+                                function: ApiFunction {
+                                    name: tc.name.clone(),
+                                    arguments: tc.arguments.to_string(),
+                                },
+                            })
+                            .collect(),
+                    )
+                };
+                // Content is null (not present) when tool_calls are the primary payload,
+                // but some providers tolerate an empty string; send None when tool_calls
+                // are present and text is empty to stay spec-compliant.
+                let content = if text.is_empty() && api_tool_calls.is_some() {
+                    None
+                } else {
+                    Some(serde_json::Value::String(text.clone()))
+                };
+                ChatMessage {
+                    role: role.into(),
+                    content,
+                    tool_call_id: None,
+                    tool_calls: api_tool_calls,
+                }
+            }
+            MessageContent::ToolResult {
+                tool_call_id,
+                content,
+            } => ChatMessage {
+                role: "tool".into(),
+                content: Some(serde_json::Value::String(content.clone())),
+                tool_call_id: Some(tool_call_id.clone()),
+                tool_calls: None,
+            },
+        }
+    }
+
     fn build_request(&self, request: &CompletionRequest) -> ChatRequest {
         let mut messages: Vec<ChatMessage> = Vec::new();
 
@@ -163,33 +222,7 @@ impl OpenAiCompatibleClient {
         }
 
         for msg in &request.messages {
-            let role = match msg.role {
-                Role::System => "system",
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::Tool => "tool",
-            };
-            match &msg.content {
-                MessageContent::Text(text) => {
-                    messages.push(ChatMessage {
-                        role: role.into(),
-                        content: Some(serde_json::Value::String(text.clone())),
-                        tool_call_id: None,
-                        tool_calls: None,
-                    });
-                }
-                MessageContent::ToolResult {
-                    tool_call_id,
-                    content,
-                } => {
-                    messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content: Some(serde_json::Value::String(content.clone())),
-                        tool_call_id: Some(tool_call_id.clone()),
-                        tool_calls: None,
-                    });
-                }
-            }
+            messages.push(Self::convert_message(msg));
         }
 
         ChatRequest {
@@ -455,6 +488,7 @@ mod tests {
             messages: vec![Message {
                 role: Role::User,
                 content: MessageContent::Text("Hello".into()),
+                tool_calls: vec![],
             }],
             temperature: None,
             max_tokens: None,

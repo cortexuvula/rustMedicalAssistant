@@ -115,11 +115,14 @@ impl AgentOrchestrator {
                 });
             }
 
-            // Append the assistant message that contains the tool call requests
+            // Append the assistant message that contains the tool call requests.
+            // The tool_calls field is required by OpenAI/Anthropic so that subsequent
+            // tool-result messages can reference the tool_call_id.
             let assistant_content = response.content.clone().unwrap_or_default();
             messages.push(Message {
                 role: Role::Assistant,
                 content: MessageContent::Text(assistant_content),
+                tool_calls: response.tool_calls.clone(),
             });
 
             // Execute each requested tool call
@@ -162,6 +165,7 @@ impl AgentOrchestrator {
                         tool_call_id: tool_call.id.clone(),
                         content: tool_result.content,
                     },
+                    tool_calls: vec![],
                 });
             }
 
@@ -215,6 +219,7 @@ fn build_messages(context: &AgentContext) -> Vec<Message> {
         messages.push(Message {
             role: Role::System,
             content: MessageContent::Text(patient_text),
+            tool_calls: vec![],
         });
     }
 
@@ -230,6 +235,7 @@ fn build_messages(context: &AgentContext) -> Vec<Message> {
         messages.push(Message {
             role: Role::System,
             content: MessageContent::Text(format!("Relevant knowledge base excerpts:\n\n{}", rag_text)),
+            tool_calls: vec![],
         });
     }
 
@@ -237,6 +243,7 @@ fn build_messages(context: &AgentContext) -> Vec<Message> {
     messages.push(Message {
         role: Role::User,
         content: MessageContent::Text(context.user_message.clone()),
+        tool_calls: vec![],
     });
 
     messages

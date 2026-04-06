@@ -26,6 +26,8 @@ pub struct CompletionRequest {
 pub struct Message {
     pub role: Role,
     pub content: MessageContent,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// The role of the message author.

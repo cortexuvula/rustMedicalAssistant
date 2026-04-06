@@ -16,8 +16,9 @@ struct RedactionPattern {
 lazy_static! {
     static ref PATTERNS: Vec<RedactionPattern> = {
         let defs: &[(&str, &'static str)] = &[
-            // Social Security Number: 123-45-6789 or 123456789
-            (r"\b\d{3}-?\d{2}-?\d{4}\b", "[SSN]"),
+            // Social Security Number: require keyword prefix to avoid false positives
+            // on lab values, reference numbers, and other 9-digit sequences.
+            (r"(?i)(?:SSN|Social\s+Security(?:\s+Number)?|Social\s+Sec|SS#|SS\s+#)\s*:?\s*\d{3}-?\d{2}-?\d{4}", "[SSN]"),
             // Phone numbers (US-centric, optional country code)
             (
                 r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b",
@@ -43,8 +44,10 @@ lazy_static! {
                 r"\b\d{1,5}\s+[A-Za-z]+(?:\s+[A-Za-z]+)*\s+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Ln|Lane|Rd|Road|Ct|Court|Way|Pl|Place)\.?\b",
                 "[ADDRESS]",
             ),
-            // US ZIP codes: 12345 or 12345-6789
-            (r"\b\d{5}(?:-\d{4})?\b", "[ZIP]"),
+            // US ZIP codes: require "zip"/"zip code" keyword or a two-UPPERCASE-letter
+            // US state abbreviation (word-boundary anchored, case-sensitive match)
+            // before the 5-digit code to avoid false positives on medical values.
+            (r"(?:(?i)zip(?:\s+code)?|(?-i)\b[A-Z]{2}\b)\s+\d{5}(?:-\d{4})?", "[ZIP]"),
         ];
 
         defs.iter()
@@ -104,8 +107,19 @@ mod tests {
 
     #[test]
     fn redacts_ssn() {
-        assert_eq!(PhiRedactor::redact("SSN: 123-45-6789"), "SSN: [SSN]");
-        assert_eq!(PhiRedactor::redact("id 123456789 here"), "id [SSN] here");
+        // Keyword-prefixed SSN patterns should be redacted.
+        assert_eq!(PhiRedactor::redact("SSN: 123-45-6789"), "[SSN]");
+        assert_eq!(PhiRedactor::redact("SSN 123-45-6789"), "[SSN]");
+        assert_eq!(PhiRedactor::redact("Social Security Number: 123-45-6789"), "[SSN]");
+        assert_eq!(PhiRedactor::redact("SS# 123456789"), "[SSN]");
+    }
+
+    #[test]
+    fn does_not_redact_9_digit_numbers() {
+        // 9-digit numbers without SSN keyword context must NOT be redacted.
+        assert_eq!(PhiRedactor::redact("Lab value 123456789"), "Lab value 123456789");
+        assert_eq!(PhiRedactor::redact("Reference #987654321"), "Reference #987654321");
+        assert_eq!(PhiRedactor::redact("id 123456789 here"), "id 123456789 here");
     }
 
     #[test]
@@ -149,7 +163,7 @@ mod tests {
 
     #[test]
     fn contains_phi_detects() {
-        assert!(PhiRedactor::contains_phi("SSN is 123-45-6789"));
+        assert!(PhiRedactor::contains_phi("SSN: 123-45-6789"));
         assert!(PhiRedactor::contains_phi("email: foo@bar.com"));
         assert!(!PhiRedactor::contains_phi("Hello, world!"));
     }
@@ -169,5 +183,23 @@ mod tests {
         assert!(out.contains("[DOB]"), "got: {}", out);
         assert!(!out.contains("john@example.com"), "got: {}", out);
         assert!(!out.contains("123-45-6789"), "got: {}", out);
+    }
+
+    #[test]
+    fn redacts_zip() {
+        // ZIP with explicit keyword prefix.
+        let out = PhiRedactor::redact("zip code 90210");
+        assert!(out.contains("[ZIP]"), "got: {}", out);
+        // ZIP with two-letter state abbreviation.
+        let out2 = PhiRedactor::redact("Springfield IL 62701");
+        assert!(out2.contains("[ZIP]"), "got: {}", out2);
+    }
+
+    #[test]
+    fn does_not_redact_5_digit_numbers() {
+        // 5-digit numbers without address/zip context must NOT be redacted.
+        assert_eq!(PhiRedactor::redact("WBC count 15000"), "WBC count 15000");
+        assert_eq!(PhiRedactor::redact("Dose 10000 units"), "Dose 10000 units");
+        assert_eq!(PhiRedactor::redact("Platelet count 85000"), "Platelet count 85000");
     }
 }
