@@ -1,1 +1,49 @@
-//! Stub — implemented in later tasks
+use async_trait::async_trait;
+use medical_core::{
+    error::{AppError, AppResult},
+    traits::Agent,
+    types::{AgentContext, AgentResponse, ToolDef},
+};
+use serde_json::json;
+
+/// Agent specializing in generating professional medical referral letters.
+pub struct ReferralAgent;
+
+#[async_trait]
+impl Agent for ReferralAgent {
+    fn name(&self) -> &str {
+        "referral"
+    }
+
+    fn description(&self) -> &str {
+        "Generates professional medical referral letters with appropriate specialty matching, ICD-10 codes, and clinical summaries for referring providers."
+    }
+
+    fn system_prompt(&self) -> &str {
+        "You are a medical referral specialist responsible for generating professional, clinically complete \
+        referral letters and consultation requests. Your responsibilities include: (1) inferring the most \
+        appropriate medical specialty for referral based on diagnosis, symptoms, and clinical needs (e.g., \
+        cardiology for chest pain with EKG changes, rheumatology for inflammatory arthritis, nephrology for \
+        CKD stage 3+); (2) composing formal referral letters that include patient demographics, reason for \
+        referral, relevant medical history, current medications, allergies, examination findings, diagnostic \
+        results, and specific clinical questions to be answered; (3) assigning accurate ICD-10 codes for the \
+        primary diagnosis and relevant comorbidities supporting the referral; (4) including urgency level \
+        (routine, urgent, emergent) with clinical justification; (5) ensuring referral letters meet payer \
+        authorization requirements when applicable. Use professional medical correspondence format and \
+        appropriate clinical terminology."
+    }
+
+    fn available_tools(&self) -> Vec<ToolDef> {
+        vec![ToolDef {
+            name: "search_icd_codes".into(),
+            description: "Search for ICD-10 codes to include in referral documentation".into(),
+            parameters: json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
+        }]
+    }
+
+    async fn execute(&self, _context: AgentContext) -> AppResult<AgentResponse> {
+        Err(AppError::Agent(
+            "Use AgentOrchestrator::execute instead".into(),
+        ))
+    }
+}
