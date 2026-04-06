@@ -27,6 +27,7 @@ function createAudioStore() {
 
   let timer: ReturnType<typeof setInterval> | null = null;
   let waveformUnlisten: UnlistenFn | null = null;
+  let busy = false;
 
   function clearTimer() {
     if (timer !== null) {
@@ -46,6 +47,8 @@ function createAudioStore() {
     subscribe,
 
     async startRecording(device: string | null = null) {
+      if (busy) return;
+      busy = true;
       try {
         // Listen for waveform events BEFORE starting recording
         waveformUnlisten = await listen<number[]>('waveform-data', (event) => {
@@ -75,6 +78,8 @@ function createAudioStore() {
           ...s,
           error: e?.toString() || 'Failed to start recording',
         }));
+      } finally {
+        busy = false;
       }
     },
 
@@ -105,6 +110,8 @@ function createAudioStore() {
     },
 
     async stop() {
+      if (busy) return;
+      busy = true;
       clearTimer();
       try {
         const recordingId = await audioApi.stopRecording();
@@ -122,11 +129,14 @@ function createAudioStore() {
           waveformUnlisten();
           waveformUnlisten = null;
         }
+        // Don't change state to 'stopped' on error — backend may still be recording
         update((s) => ({
           ...s,
-          state: 'stopped',
-          error: e?.toString() || 'Failed to stop',
+          error: e?.toString() || 'Failed to stop recording',
         }));
+        startTimer(); // Restore timer if we were recording
+      } finally {
+        busy = false;
       }
     },
 

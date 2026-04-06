@@ -100,16 +100,17 @@ pub async fn transcribe_recording(
     // --- emit: transcribing ---
     let _ = app.emit("transcription-progress", "transcribing");
 
-    // Acquire the STT failover chain and run transcription.
-    let transcript = {
+    // Clone the Arc<SttFailover> so we release the mutex before the long-running transcribe await.
+    let stt = {
         let guard = state.stt_providers.lock().await;
-        let stt = guard
+        guard
             .as_ref()
-            .ok_or_else(|| "No STT providers configured".to_string())?;
-        stt.transcribe(audio, config)
-            .await
-            .map_err(|e| e.to_string())?
+            .cloned()
+            .ok_or_else(|| "No STT providers configured. Add an API key in Settings.".to_string())?
     };
+    let transcript = stt.transcribe(audio, config)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Persist the transcript and mark as Completed.
     recording.transcript = Some(transcript.text.clone());
@@ -135,7 +136,7 @@ pub async fn list_stt_providers(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<(String, bool)>, String> {
     let guard = state.stt_providers.lock().await;
-    match guard.as_ref() {
+    match guard.as_deref() {
         Some(stt) => Ok(stt.provider_statuses()),
         None => Ok(vec![]),
     }

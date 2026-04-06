@@ -2,7 +2,7 @@
   import { selectedRecording, recordings, selectRecording } from '../stores/recordings';
   import { generateSoap, generateReferral, generateLetter } from '../api/generation';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-  import { onDestroy } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
 
   let generating = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -10,16 +10,14 @@
 
   let progressUnlisten: UnlistenFn | null = null;
 
-  // Listen for generation progress events
-  async function setupProgressListener() {
+  onMount(async () => {
     progressUnlisten = await listen<{ type: string; status: string }>(
       'generation-progress',
       (event) => {
         progressStatus = `${event.payload.type}: ${event.payload.status}`;
       }
     );
-  }
-  setupProgressListener();
+  });
 
   onDestroy(() => {
     progressUnlisten?.();

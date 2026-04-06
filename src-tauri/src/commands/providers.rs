@@ -19,7 +19,7 @@ pub async fn reinit_providers(
     let stt = state::init_stt_providers(&state.keys);
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt;
+        *guard = stt.map(std::sync::Arc::new);
     }
 
     Ok(available)

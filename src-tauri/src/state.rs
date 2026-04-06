@@ -56,7 +56,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub recording_active: Arc<Mutex<bool>>,
     pub ai_providers: Arc<Mutex<ProviderRegistry>>,
-    pub stt_providers: Arc<Mutex<Option<SttFailover>>>,
+    pub stt_providers: Arc<Mutex<Option<Arc<SttFailover>>>>,
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
     pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
@@ -185,7 +185,7 @@ impl AppState {
             data_dir,
             recording_active: Arc::new(Mutex::new(false)),
             ai_providers: Arc::new(Mutex::new(ai_providers)),
-            stt_providers: Arc::new(Mutex::new(stt_providers)),
+            stt_providers: Arc::new(Mutex::new(stt_providers.map(Arc::new))),
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
 
