@@ -4251,6 +4251,7 @@ dependencies = [
 name = "rust-medical-assistant"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "medical-agents",
  "medical-ai-providers",
  "medical-audio",
@@ -4268,6 +4269,8 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
