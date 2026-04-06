@@ -24,6 +24,7 @@ pub fn run() {
             commands::export::export_pdf,
             commands::export::export_docx,
             commands::export::export_fhir,
+            commands::providers::reinit_providers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
