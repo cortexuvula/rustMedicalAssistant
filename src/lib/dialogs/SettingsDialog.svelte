@@ -1,12 +1,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Modal from '../components/Modal.svelte';
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
   import { listApiKeys, setApiKey } from '../api/settings';
 
+  interface Props {
+    open: boolean;
+  }
+
+  let { open = $bindable() }: Props = $props();
+
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
 
+  // API Keys state
   const API_PROVIDERS = [
     { id: 'openai', label: 'OpenAI' },
     { id: 'anthropic', label: 'Anthropic' },
@@ -21,6 +29,7 @@
   let apiKeyInputs = $state<Record<string, string>>({});
   let saveStatus = $state<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});
 
+  // Initialize save status for all providers
   for (const p of API_PROVIDERS) {
     apiKeyInputs[p.id] = '';
     saveStatus[p.id] = 'idle';
@@ -46,11 +55,15 @@
       }
       apiKeyInputs[provider] = '';
       saveStatus[provider] = 'saved';
-      setTimeout(() => { saveStatus[provider] = 'idle'; }, 2000);
+      setTimeout(() => {
+        saveStatus[provider] = 'idle';
+      }, 2000);
     } catch (err) {
       console.error(`Failed to save API key for ${provider}:`, err);
       saveStatus[provider] = 'error';
-      setTimeout(() => { saveStatus[provider] = 'idle'; }, 3000);
+      setTimeout(() => {
+        saveStatus[provider] = 'idle';
+      }, 3000);
     }
   }
 
@@ -100,11 +113,7 @@
   ];
 </script>
 
-<div class="settings-page">
-  <div class="settings-header">
-    <h2>Settings</h2>
-  </div>
-
+<Modal {open} title="Settings" onClose={() => (open = false)}>
   <div class="settings-layout">
     <nav class="settings-nav">
       {#each navItems as item}
@@ -277,37 +286,17 @@
       {/if}
     </div>
   </div>
-</div>
+</Modal>
 
 <style>
-  .settings-page {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background-color: var(--bg-primary);
-    overflow: hidden;
-  }
-
-  .settings-header {
-    padding: 16px 24px 12px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .settings-header h2 {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
   .settings-layout {
     display: flex;
-    flex: 1;
-    overflow: hidden;
+    height: 100%;
+    min-height: 400px;
   }
 
   .settings-nav {
-    width: 140px;
+    width: 120px;
     flex-shrink: 0;
     background-color: var(--bg-secondary);
     border-right: 1px solid var(--border);
@@ -320,7 +309,7 @@
   .nav-item {
     width: 100%;
     text-align: left;
-    padding: 9px 16px;
+    padding: 8px 12px;
     font-size: 13px;
     color: var(--text-secondary);
     border-radius: 0;
@@ -336,35 +325,33 @@
     background-color: var(--bg-active);
     color: var(--accent);
     font-weight: 500;
-    border-left: 2px solid var(--accent);
   }
 
   .settings-content {
     flex: 1;
     overflow-y: auto;
-    padding: 24px;
-    max-width: 560px;
+    padding: 20px;
   }
 
   .settings-section {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 16px;
   }
 
   .section-title {
     font-size: 15px;
     font-weight: 600;
     color: var(--text-primary);
-    padding-bottom: 10px;
+    padding-bottom: 8px;
     border-bottom: 1px solid var(--border-light);
-    margin-bottom: 2px;
+    margin-bottom: 4px;
   }
 
   .section-desc {
     font-size: 12px;
     color: var(--text-muted);
-    margin-top: -10px;
+    margin-top: -8px;
   }
 
   .form-group {
@@ -390,7 +377,6 @@
   .checkbox-label {
     cursor: pointer;
     user-select: none;
-    flex-direction: row;
   }
 
   .checkbox-label input[type='checkbox'] {
