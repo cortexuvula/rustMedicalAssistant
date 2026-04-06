@@ -37,11 +37,10 @@ impl Default for SoapPromptConfig {
 /// template-specific prompt is generated.
 pub fn build_soap_prompt(config: &SoapPromptConfig) -> String {
     // Use the custom prompt verbatim when provided.
-    if let Some(ref custom) = config.custom_prompt {
-        if !custom.is_empty() {
+    if let Some(ref custom) = config.custom_prompt
+        && !custom.is_empty() {
             return custom.clone();
         }
-    }
 
     let template_instruction = match config.template {
         SoapTemplate::FollowUp => {

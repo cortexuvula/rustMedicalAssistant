@@ -48,7 +48,7 @@ impl Tool for VitalsExtractorTool {
         if let Some(caps) = bp_re.captures(text) {
             let systolic: u32 = caps[1].parse().unwrap_or(0);
             let diastolic: u32 = caps[2].parse().unwrap_or(0);
-            if systolic >= 60 && systolic <= 250 && diastolic >= 30 && diastolic <= 150 {
+            if (60..=250).contains(&systolic) && (30..=150).contains(&diastolic) {
                 vitals.insert("blood_pressure".into(), json!({
                     "systolic": systolic,
                     "diastolic": diastolic,
@@ -58,7 +58,7 @@ impl Tool for VitalsExtractorTool {
         } else if let Some(caps) = bp_plain_re.captures(text) {
             let systolic: u32 = caps[1].parse().unwrap_or(0);
             let diastolic: u32 = caps[2].parse().unwrap_or(0);
-            if systolic >= 60 && systolic <= 250 && diastolic >= 30 && diastolic <= 150 {
+            if (60..=250).contains(&systolic) && (30..=150).contains(&diastolic) {
                 vitals.insert("blood_pressure".into(), json!({
                     "systolic": systolic,
                     "diastolic": diastolic,
@@ -74,7 +74,7 @@ impl Tool for VitalsExtractorTool {
         .unwrap();
         if let Some(caps) = hr_re.captures(text) {
             let hr: u32 = caps[1].parse().unwrap_or(0);
-            if hr >= 20 && hr <= 300 {
+            if (20..=300).contains(&hr) {
                 vitals.insert("heart_rate".into(), json!({
                     "value": hr,
                     "unit": "bpm"
@@ -87,20 +87,19 @@ impl Tool for VitalsExtractorTool {
             r"(?i)(?:temp(?:erature)?|t)[:\s]*(\d{2,3}(?:\.\d)?)\s*(?:°?\s*([fcFC]))?"
         )
         .unwrap();
-        if let Some(caps) = temp_re.captures(text) {
-            if let Ok(temp_val) = caps[1].parse::<f32>() {
+        if let Some(caps) = temp_re.captures(text)
+            && let Ok(temp_val) = caps[1].parse::<f32>() {
                 let unit = caps.get(2).map_or("", |m| m.as_str()).to_uppercase();
                 // Validate reasonable temperature range
-                let is_fahrenheit = unit == "F" || (temp_val >= 95.0 && temp_val <= 107.0 && unit != "C");
-                if is_fahrenheit || unit == "C" || (temp_val >= 35.0 && temp_val <= 42.0) {
-                    let unit_str = if unit == "C" || (temp_val >= 35.0 && temp_val <= 42.0 && unit != "F") { "C" } else { "F" };
+                let is_fahrenheit = unit == "F" || ((95.0..=107.0).contains(&temp_val) && unit != "C");
+                if is_fahrenheit || unit == "C" || (35.0..=42.0).contains(&temp_val) {
+                    let unit_str = if unit == "C" || ((35.0..=42.0).contains(&temp_val) && unit != "F") { "C" } else { "F" };
                     vitals.insert("temperature".into(), json!({
                         "value": temp_val,
                         "unit": unit_str
                     }));
                 }
             }
-        }
 
         // Respiratory rate: e.g. "RR 16", "respiratory rate: 18 breaths/min"
         let rr_re = Regex::new(
@@ -109,7 +108,7 @@ impl Tool for VitalsExtractorTool {
         .unwrap();
         if let Some(caps) = rr_re.captures(text) {
             let rr: u32 = caps[1].parse().unwrap_or(0);
-            if rr >= 4 && rr <= 60 {
+            if (4..=60).contains(&rr) {
                 vitals.insert("respiratory_rate".into(), json!({
                     "value": rr,
                     "unit": "breaths/min"
@@ -124,7 +123,7 @@ impl Tool for VitalsExtractorTool {
         .unwrap();
         if let Some(caps) = spo2_re.captures(text) {
             let spo2: u32 = caps[1].parse().unwrap_or(0);
-            if spo2 >= 50 && spo2 <= 100 {
+            if (50..=100).contains(&spo2) {
                 vitals.insert("spo2".into(), json!({
                     "value": spo2,
                     "unit": "%"
