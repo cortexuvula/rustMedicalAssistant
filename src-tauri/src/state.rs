@@ -59,7 +59,6 @@ pub struct AppState {
     pub stt_providers: Arc<Mutex<Option<SttFailover>>>,
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
-    pub waveform_rx: Arc<std::sync::Mutex<Option<std::sync::mpsc::Receiver<Vec<f32>>>>>,
     pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
 }
 
@@ -189,7 +188,7 @@ impl AppState {
             stt_providers: Arc::new(Mutex::new(stt_providers)),
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
-            waveform_rx: Arc::new(std::sync::Mutex::new(None)),
+
             current_recording: Arc::new(std::sync::Mutex::new(None)),
         })
     }

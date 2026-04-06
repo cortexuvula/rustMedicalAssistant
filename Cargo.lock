@@ -4254,6 +4254,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures-util",
+ "hound",
  "medical-agents",
  "medical-ai-providers",
  "medical-audio",
