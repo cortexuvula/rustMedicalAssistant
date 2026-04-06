@@ -1,0 +1,101 @@
+// ── Processing Status ──────────────────────────────────────────────────────────
+
+export type ProcessingStatus =
+  | { status: 'pending' }
+  | { status: 'processing'; started_at: string }
+  | { status: 'completed'; completed_at: string }
+  | { status: 'failed'; error: string; retry_count: number };
+
+// ── Recording ─────────────────────────────────────────────────────────────────
+
+export interface Recording {
+  id: string;
+  filename: string;
+  transcript: string | null;
+  soap_note: string | null;
+  referral: string | null;
+  letter: string | null;
+  chat: string | null;
+  patient_name: string | null;
+  audio_path: string;
+  duration_seconds: number | null;
+  file_size_bytes: number | null;
+  stt_provider: string;
+  ai_provider: string | null;
+  tags: string[];
+  status: ProcessingStatus;
+  created_at: string;
+  metadata: any;
+}
+
+// ── Recording Summary ─────────────────────────────────────────────────────────
+
+export interface RecordingSummary {
+  id: string;
+  filename: string;
+  patient_name: string | null;
+  status: ProcessingStatus;
+  duration_seconds: number | null;
+  created_at: string;
+  tags: string[];
+  has_transcript: boolean;
+  has_soap_note: boolean;
+  has_referral: boolean;
+  has_letter: boolean;
+}
+
+// ── App Config ────────────────────────────────────────────────────────────────
+
+export interface AppConfig {
+  theme: 'dark' | 'light';
+  language: string;
+  ai_provider: string;
+  ai_model: string;
+  stt_provider: string;
+  tts_provider: string;
+  tts_voice: string;
+  temperature: number;
+  sample_rate: number;
+  autosave_enabled: boolean;
+  autosave_interval_secs: number;
+  search_top_k: number;
+  mmr_lambda: number;
+  [key: string]: any;
+}
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+export interface ToolCallRecord {
+  tool_name: string;
+  arguments: any;
+  result: any;
+  duration_ms: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+  agent?: string;
+  tool_calls?: ToolCallRecord[];
+}
+
+// ── Processing Events ─────────────────────────────────────────────────────────
+
+export type ProcessingEvent =
+  | { type: 'started'; recording_id: string }
+  | { type: 'progress'; recording_id: string; step: string; percent: number }
+  | { type: 'completed'; recording_id: string }
+  | { type: 'failed'; recording_id: string; error: string }
+  | { type: 'queue_update'; pending: number; processing: number; completed: number };
+
+// ── Audio Device ──────────────────────────────────────────────────────────────
+
+export interface AudioDevice {
+  name: string;
+  is_input: boolean;
+  is_default: boolean;
+  sample_rates: number[];
+  channels: number;
+}
