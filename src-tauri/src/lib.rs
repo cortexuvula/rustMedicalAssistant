@@ -35,6 +35,12 @@ pub fn run() {
             commands::chat::chat_with_agent,
             commands::chat::list_ai_providers,
             commands::chat::set_active_provider,
+            commands::transcription::transcribe_recording,
+            commands::transcription::list_stt_providers,
+            commands::generation::generate_soap,
+            commands::generation::generate_referral,
+            commands::generation::generate_letter,
+            commands::generation::generate_synopsis,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
