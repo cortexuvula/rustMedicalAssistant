@@ -20,6 +20,10 @@ tauri-plugin-opener = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+dirs = "6"
+uuid = { workspace = true }
+tokio = { workspace = true }
+
 medical-core = { path = "../crates/core" }
 medical-db = { path = "../crates/db" }
 medical-security = { path = "../crates/security" }
