@@ -83,6 +83,7 @@ struct StreamEvent {
     #[serde(rename = "type")]
     kind: String,
     delta: Option<StreamDelta>,
+    content_block: Option<ContentBlock>,
     message: Option<MessageEvent>,
     usage: Option<AnthropicUsage>,
 }
@@ -321,6 +322,17 @@ impl AiProvider for AnthropicProvider {
                             Ok(event) => {
                                 let mut out = Vec::new();
                                 match event.kind.as_str() {
+                                    "content_block_start" => {
+                                        if let Some(cb) = &event.content_block {
+                                            if cb.kind == "tool_use" {
+                                                out.push(Ok(StreamChunk::ToolCallDelta {
+                                                    id: cb.id.clone().unwrap_or_default(),
+                                                    name: cb.name.clone(),
+                                                    arguments_delta: String::new(),
+                                                }));
+                                            }
+                                        }
+                                    }
                                     "content_block_delta" => {
                                         if let Some(delta) = &event.delta {
                                             match delta.kind.as_deref() {

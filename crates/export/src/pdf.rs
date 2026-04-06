@@ -52,11 +52,11 @@ pub fn render_document(title: &str, body: &str, date: &str) -> ExportResult<Vec<
     const A4_HEIGHT: f32 = 297.0;
     const MARGIN_LEFT: f32 = 15.0;
     const MARGIN_TOP: f32 = 280.0;
+    const MARGIN_BOTTOM: f32 = 10.0;
     const LINE_HEIGHT: f32 = 6.0;
 
     let (doc, page1, layer1) =
         PdfDocument::new(title, Mm(A4_WIDTH), Mm(A4_HEIGHT), "Main Layer");
-    let current_layer = doc.get_page(page1).get_layer(layer1);
 
     let font = doc
         .add_builtin_font(BuiltinFont::Helvetica)
@@ -65,6 +65,7 @@ pub fn render_document(title: &str, body: &str, date: &str) -> ExportResult<Vec<
         .add_builtin_font(BuiltinFont::HelveticaBold)
         .map_err(|e| ExportError::Pdf(format!("Bold font load error: {e}")))?;
 
+    let mut current_layer = doc.get_page(page1).get_layer(layer1);
     let mut y = MARGIN_TOP;
 
     // Title
@@ -77,9 +78,12 @@ pub fn render_document(title: &str, body: &str, date: &str) -> ExportResult<Vec<
 
     // Body — line by line
     for line in body.lines() {
-        if y < 10.0 {
-            // Page overflow guard — skip remaining lines rather than panic.
-            break;
+        if y < MARGIN_BOTTOM {
+            // Page overflow — create a new page and continue.
+            let (new_page, new_layer) =
+                doc.add_page(Mm(A4_WIDTH), Mm(A4_HEIGHT), "Main Layer");
+            current_layer = doc.get_page(new_page).get_layer(new_layer);
+            y = MARGIN_TOP;
         }
         let is_header = SOAP_HEADERS.iter().any(|&h| line.starts_with(h));
         if is_header {
@@ -145,5 +149,20 @@ mod tests {
         let recording = Recording::new("empty.wav", PathBuf::from("/tmp/empty.wav"));
         let result = PdfExporter::export_letter(&recording);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn export_long_soap_creates_multi_page_pdf() {
+        let mut rec = Recording::new("test.wav", PathBuf::from("/tmp/test.wav"));
+        rec.soap_note = Some(
+            (0..200)
+                .map(|i| format!("Line {i}: Patient presents with symptoms"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        rec.patient_name = Some("Test Patient".into());
+        let bytes = PdfExporter::export_soap(&rec).unwrap();
+        assert!(bytes.len() > 100);
+        assert_eq!(&bytes[0..5], b"%PDF-");
     }
 }

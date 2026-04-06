@@ -20,7 +20,7 @@ export interface Recording {
   audio_path: string;
   duration_seconds: number | null;
   file_size_bytes: number | null;
-  stt_provider: string;
+  stt_provider: string | null;
   ai_provider: string | null;
   tags: string[];
   status: ProcessingStatus;

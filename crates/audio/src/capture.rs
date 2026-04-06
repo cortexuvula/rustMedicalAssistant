@@ -194,6 +194,19 @@ pub fn start_capture(
                     let waveform = downsample_waveform(&acc, 128);
                     let _ = waveform_tx.send(waveform);
                 }
+                // Final drain: capture any samples that arrived between the
+                // empty-check above and the stop_flag-check (race window).
+                loop {
+                    let final_batch: Vec<f32> = cons.pop_iter().collect();
+                    if final_batch.is_empty() {
+                        break;
+                    }
+                    for &s in &final_batch {
+                        if let Err(e) = writer.write_sample(s) {
+                            tracing::error!("WAV write error (final drain): {e}");
+                        }
+                    }
+                }
                 break;
             } else {
                 thread::sleep(Duration::from_millis(5));

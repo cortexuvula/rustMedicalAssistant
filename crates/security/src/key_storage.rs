@@ -56,6 +56,7 @@ struct KeyFile {
 pub struct KeyStorage {
     cipher: Aes256Gcm,
     storage_path: PathBuf,
+    file_lock: std::sync::Mutex<()>,
 }
 
 impl KeyStorage {
@@ -71,11 +72,13 @@ impl KeyStorage {
         Ok(Self {
             cipher,
             storage_path: config_dir.join(KEY_FILE_NAME),
+            file_lock: std::sync::Mutex::new(()),
         })
     }
 
     /// Encrypt `api_key` and store it under `provider`.
     pub fn store_key(&self, provider: &str, api_key: &str) -> SecurityResult<()> {
+        let _lock = self.file_lock.lock().unwrap();
         let mut nonce_bytes = [0u8; NONCE_LENGTH];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -131,6 +134,7 @@ impl KeyStorage {
 
     /// Remove the key for `provider`.  Returns `true` if it existed.
     pub fn remove_key(&self, provider: &str) -> SecurityResult<bool> {
+        let _lock = self.file_lock.lock().unwrap();
         let mut file = self.load_file()?;
         let existed = file.keys.remove(provider).is_some();
         if existed {
