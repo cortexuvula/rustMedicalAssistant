@@ -323,15 +323,14 @@ impl AiProvider for AnthropicProvider {
                                 let mut out = Vec::new();
                                 match event.kind.as_str() {
                                     "content_block_start" => {
-                                        if let Some(cb) = &event.content_block {
-                                            if cb.kind == "tool_use" {
+                                        if let Some(cb) = &event.content_block
+                                            && cb.kind == "tool_use" {
                                                 out.push(Ok(StreamChunk::ToolCallDelta {
                                                     id: cb.id.clone().unwrap_or_default(),
                                                     name: cb.name.clone(),
                                                     arguments_delta: String::new(),
                                                 }));
                                             }
-                                        }
                                     }
                                     "content_block_delta" => {
                                         if let Some(delta) = &event.delta {
