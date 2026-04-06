@@ -10,6 +10,13 @@
 </script>
 
 <div class="recording-header">
+  {#if $audio.error}
+    <div class="error-banner">
+      <span class="error-text">{$audio.error}</span>
+      <button class="error-dismiss" onclick={() => audio.reset()}>Dismiss</button>
+    </div>
+  {/if}
+
   <div class="controls-row">
     <div class="timer">
       {formatTime($audio.elapsed)}
@@ -17,25 +24,25 @@
 
     <div class="controls">
       {#if $audio.state === 'idle'}
-        <button class="btn btn-record" on:click={() => audio.startRecording()}>
+        <button class="btn btn-record" onclick={() => audio.startRecording()}>
           <span class="btn-icon">●</span> Record
         </button>
       {:else if $audio.state === 'recording'}
-        <button class="btn btn-pause" on:click={() => audio.pause()}>
+        <button class="btn btn-pause" onclick={() => audio.pause()}>
           <span class="btn-icon">⏸</span> Pause
         </button>
-        <button class="btn btn-stop" on:click={() => audio.stop()}>
+        <button class="btn btn-stop" onclick={() => audio.stop()}>
           <span class="btn-icon">■</span> Stop
         </button>
       {:else if $audio.state === 'paused'}
-        <button class="btn btn-resume" on:click={() => audio.resume()}>
+        <button class="btn btn-resume" onclick={() => audio.resume()}>
           <span class="btn-icon">▶</span> Resume
         </button>
-        <button class="btn btn-stop" on:click={() => audio.stop()}>
+        <button class="btn btn-stop" onclick={() => audio.stop()}>
           <span class="btn-icon">■</span> Stop
         </button>
       {:else if $audio.state === 'stopped'}
-        <button class="btn btn-new" on:click={() => audio.reset()}>
+        <button class="btn btn-new" onclick={() => audio.reset()}>
           <span class="btn-icon">+</span> New Recording
         </button>
       {/if}
@@ -53,6 +60,39 @@
     border-bottom: 1px solid var(--border);
     padding: 16px;
     flex-shrink: 0;
+  }
+
+  .error-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background-color: var(--danger-bg, rgba(239, 68, 68, 0.1));
+    border: 1px solid var(--danger, #ef4444);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    color: var(--danger, #ef4444);
+  }
+
+  .error-text {
+    flex: 1;
+  }
+
+  .error-dismiss {
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--danger, #ef4444);
+    border: 1px solid var(--danger, #ef4444);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .error-dismiss:hover {
+    background-color: var(--danger, #ef4444);
+    color: white;
   }
 
   .controls-row {

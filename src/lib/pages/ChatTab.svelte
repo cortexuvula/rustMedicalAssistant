@@ -24,19 +24,7 @@
     if (!text || $isStreaming) return;
 
     input = '';
-    chat.addUserMessage(text);
-
-    // Mock streaming response
-    chat.startStreaming();
-
-    const mockResponse = `I received your message: "${text}"\n\nThis is a placeholder response. Real AI chat will be connected in a future task.`;
-
-    for (const char of mockResponse) {
-      await new Promise((r) => setTimeout(r, 12));
-      chat.appendToLast(char);
-    }
-
-    chat.stopStreaming();
+    await chat.sendMessage(text);
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -73,7 +61,7 @@
   <div class="input-area">
     <textarea
       class="chat-input"
-      placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+      placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
       rows={3}
       bind:value={input}
       onkeydown={handleKeyDown}
@@ -84,7 +72,7 @@
       onclick={sendMessage}
       disabled={!input.trim() || $isStreaming}
     >
-      {$isStreaming ? '…' : 'Send'}
+      {$isStreaming ? '...' : 'Send'}
     </button>
   </div>
 </div>

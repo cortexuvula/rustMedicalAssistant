@@ -1,4 +1,6 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import * as chatApi from '../api/chat';
 import type { ChatMessage, ToolCallRecord } from '../types';
 
 function generateId(): string {
@@ -59,6 +61,52 @@ function createChatStore() {
 
     stopStreaming() {
       isStreaming.set(false);
+    },
+
+    async sendMessage(content: string) {
+      // Add user message
+      this.addUserMessage(content);
+      this.startStreaming();
+
+      // Set up event listeners for streaming
+      let tokenUnlisten: UnlistenFn | null = null;
+      let doneUnlisten: UnlistenFn | null = null;
+      let errorUnlisten: UnlistenFn | null = null;
+
+      const cleanup = () => {
+        tokenUnlisten?.();
+        doneUnlisten?.();
+        errorUnlisten?.();
+        this.stopStreaming();
+      };
+
+      try {
+        tokenUnlisten = await listen<string>('chat-token', (event) => {
+          this.appendToLast(event.payload);
+        });
+        doneUnlisten = await listen('chat-done', () => {
+          cleanup();
+        });
+        errorUnlisten = await listen<string>('chat-error', (event) => {
+          this.appendToLast(`\n\nError: ${event.payload}`);
+          cleanup();
+        });
+
+        // Build messages for the API (convert store format to API format)
+        const currentMessages = get({ subscribe });
+        const apiMessages = currentMessages
+          .filter(
+            (m) =>
+              m.role === 'user' || (m.role === 'assistant' && m.content)
+          )
+          .slice(0, -1) // exclude the empty streaming message we just added
+          .map((m) => ({ role: m.role, content: m.content }));
+
+        await chatApi.chatStream(apiMessages);
+      } catch (e: any) {
+        this.appendToLast(`\n\nError: ${e?.toString() || 'Chat failed'}`);
+        cleanup();
+      }
     },
 
     clear() {
