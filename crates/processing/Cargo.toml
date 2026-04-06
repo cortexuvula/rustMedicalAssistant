@@ -1,0 +1,19 @@
+[package]
+name = "medical-processing"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+medical-core = { path = "../core" }
+medical-db = { path = "../db" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

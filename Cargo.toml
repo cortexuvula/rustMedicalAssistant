@@ -8,6 +8,11 @@ members = [
     "crates/ai-providers",
     "crates/stt-providers",
     "crates/tts-providers",
+    "crates/agents",
+    "crates/rag",
+    "crates/processing",
+    "crates/export",
+    "crates/translation",
     "src-tauri",
 ]
 

@@ -27,3 +27,8 @@ medical-audio = { path = "../crates/audio" }
 medical-ai-providers = { path = "../crates/ai-providers" }
 medical-stt-providers = { path = "../crates/stt-providers" }
 medical-tts-providers = { path = "../crates/tts-providers" }
+medical-agents = { path = "../crates/agents" }
+medical-rag = { path = "../crates/rag" }
+medical-processing = { path = "../crates/processing" }
+medical-export = { path = "../crates/export" }
+medical-translation = { path = "../crates/translation" }
