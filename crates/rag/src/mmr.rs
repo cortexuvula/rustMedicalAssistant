@@ -1,6 +1,5 @@
 use std::collections::HashSet;
-use uuid::Uuid;
-use medical_core::types::rag::{RagChunkMetadata, RagResult, SearchSource};
+use medical_core::types::rag::{RagResult, SearchSource};
 
 /// Compute the cosine similarity between two embedding vectors.
 ///
@@ -108,6 +107,8 @@ fn mmr_score(results: &[RagResult], idx: usize, selected: &[usize], lambda: f32)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
+    use medical_core::types::rag::RagChunkMetadata;
 
     fn make_result(id: u128, score: f32, content: &str) -> RagResult {
         RagResult {
