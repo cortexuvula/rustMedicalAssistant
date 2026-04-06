@@ -4251,7 +4251,9 @@ dependencies = [
 name = "rust-medical-assistant"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dirs",
+ "futures-util",
  "medical-agents",
  "medical-ai-providers",
  "medical-audio",
@@ -4270,6 +4272,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

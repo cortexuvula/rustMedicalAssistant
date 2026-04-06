@@ -36,6 +36,12 @@ impl ProviderRegistry {
         self.providers.get(name).map(|p| p.as_ref())
     }
     pub fn active(&self) -> Option<&dyn AiProvider> { self.get(&self.active) }
+    /// Returns the name of the currently active provider.
+    pub fn active_name(&self) -> &str { &self.active }
+    /// Returns a cloned `Arc` of the active provider, suitable for use across await points.
+    pub fn get_active_arc(&self) -> Option<Arc<dyn AiProvider>> {
+        self.providers.get(&self.active).cloned()
+    }
     pub fn set_active(&mut self, name: &str) -> bool {
         if self.providers.contains_key(name) { self.active = name.to_string(); true } else { false }
     }

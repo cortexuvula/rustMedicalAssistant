@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::info;
 
@@ -42,6 +43,13 @@ pub struct SendCaptureHandle(pub Option<CaptureHandle>);
 unsafe impl Send for SendCaptureHandle {}
 unsafe impl Sync for SendCaptureHandle {}
 
+/// Tracks the currently active recording session.
+pub struct CurrentRecording {
+    pub id: String,
+    pub wav_path: PathBuf,
+    pub started_at: Instant,
+}
+
 pub struct AppState {
     pub db: Arc<Database>,
     pub keys: Arc<KeyStorage>,
@@ -52,6 +60,7 @@ pub struct AppState {
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
     pub waveform_rx: Arc<std::sync::Mutex<Option<std::sync::mpsc::Receiver<Vec<f32>>>>>,
+    pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
 }
 
 /// Read saved API keys and register all available AI providers.
@@ -181,6 +190,7 @@ impl AppState {
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
             waveform_rx: Arc::new(std::sync::Mutex::new(None)),
+            current_recording: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 }

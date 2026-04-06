@@ -25,6 +25,16 @@ pub fn run() {
             commands::export::export_docx,
             commands::export::export_fhir,
             commands::providers::reinit_providers,
+            commands::audio::list_audio_devices,
+            commands::audio::start_recording,
+            commands::audio::stop_recording,
+            commands::audio::pause_recording,
+            commands::audio::resume_recording,
+            commands::chat::chat_send,
+            commands::chat::chat_stream,
+            commands::chat::chat_with_agent,
+            commands::chat::list_ai_providers,
+            commands::chat::set_active_provider,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
