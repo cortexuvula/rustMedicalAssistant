@@ -5,6 +5,7 @@
 //! re-running the engine is idempotent.
 
 pub mod m001_initial;
+pub mod m002_rag_tables;
 
 use rusqlite::Connection;
 
@@ -19,11 +20,18 @@ pub struct Migration {
 
 /// Returns the complete ordered list of all known migrations.
 pub fn all_migrations() -> &'static [Migration] {
-    &[Migration {
-        version: 1,
-        name: "initial_schema",
-        up: m001_initial::up,
-    }]
+    &[
+        Migration {
+            version: 1,
+            name: "initial_schema",
+            up: m001_initial::up,
+        },
+        Migration {
+            version: 2,
+            name: "rag_tables",
+            up: m002_rag_tables::up,
+        },
+    ]
 }
 
 /// Manages applying pending migrations in order.
