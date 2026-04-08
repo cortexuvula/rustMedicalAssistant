@@ -46,3 +46,4 @@ reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 eventsource-stream = "0.2"
 tokio-stream = "0.1"
 bytes = "1"
+bytemuck = { version = "1", features = ["derive"] }
