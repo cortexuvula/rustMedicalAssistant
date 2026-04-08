@@ -81,7 +81,9 @@ impl IngestionPipeline {
         // Extract medical entities and store in the knowledge graph
         let entities = extract_medical_entities(text);
         for entity in &entities {
-            let _ = self.graph_search.store_entity(entity);
+            if let Err(e) = self.graph_search.store_entity(entity) {
+                tracing::warn!("Failed to store entity '{}': {e}", entity.name);
+            }
         }
 
         Ok(total)

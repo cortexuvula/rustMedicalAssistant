@@ -89,7 +89,7 @@ impl VectorStore {
 
                 RagResult {
                     chunk_id,
-                    document_id: Uuid::nil(), // Not available from get_all_embeddings
+                    document_id: Uuid::parse_str(&rec.document_id).unwrap_or(Uuid::nil()),
                     content: rec.content.clone(),
                     score,
                     source: SearchSource::Vector,

@@ -38,8 +38,13 @@ impl Bm25Search {
             .into_iter()
             .map(|fts| {
                 // FTS5 rank is negative (more negative = better match).
-                // Normalize to a positive score in (0, 1].
-                let score = 1.0 / (1.0 + fts.rank.abs()) as f32;
+                // Normalize to a positive score in (0, 1] where higher = better.
+                // Use -rank so that more negative ranks produce higher scores.
+                let score = if fts.rank < 0.0 {
+                    (-fts.rank / (1.0 + (-fts.rank))) as f32
+                } else {
+                    0.01_f32 // shouldn't happen, but safe fallback
+                };
 
                 let chunk_id = Uuid::parse_str(&fts.id).unwrap_or(Uuid::nil());
 

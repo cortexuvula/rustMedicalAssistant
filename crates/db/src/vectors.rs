@@ -20,6 +20,7 @@ pub struct DocumentChunk {
 #[derive(Debug, Clone)]
 pub struct EmbeddingRecord {
     pub id: String,
+    pub document_id: String,
     pub content: String,
     pub embedding: Vec<f32>,
 }
@@ -76,7 +77,7 @@ impl VectorsRepo {
     /// Each BLOB is deserialised back into `Vec<f32>` via `bytemuck`.
     pub fn get_all_embeddings(conn: &Connection) -> DbResult<Vec<EmbeddingRecord>> {
         let mut stmt = conn.prepare(
-            "SELECT id, content, embedding
+            "SELECT id, document_id, content, embedding
              FROM document_chunks
              WHERE embedding IS NOT NULL",
         )?;
@@ -84,12 +85,15 @@ impl VectorsRepo {
         let rows = stmt
             .query_map([], |row| {
                 let id: String = row.get(0)?;
-                let content: String = row.get(1)?;
-                let blob: Vec<u8> = row.get(2)?;
-                let embedding: Vec<f32> =
-                    bytemuck::cast_slice(&blob).to_vec();
+                let document_id: String = row.get(1)?;
+                let content: String = row.get(2)?;
+                let blob: Vec<u8> = row.get(3)?;
+                let embedding: Vec<f32> = bytemuck::try_cast_slice(&blob)
+                    .unwrap_or(&[])
+                    .to_vec();
                 Ok(EmbeddingRecord {
                     id,
+                    document_id,
                     content,
                     embedding,
                 })

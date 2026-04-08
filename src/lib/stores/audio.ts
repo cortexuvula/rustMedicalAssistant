@@ -50,6 +50,8 @@ function createAudioStore() {
       if (busy) return;
       busy = true;
       try {
+        // Clean up any stale listener before attaching a new one
+        if (waveformUnlisten) { waveformUnlisten(); waveformUnlisten = null; }
         // Listen for waveform events BEFORE starting recording
         waveformUnlisten = await listen<number[]>('waveform-data', (event) => {
           update((s) => ({

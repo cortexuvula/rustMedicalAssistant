@@ -94,13 +94,13 @@ function createChatStore() {
       });
 
       // Build messages for the API — use get(store) to read current value
+      // Filter excludes the empty streaming message (assistant with '' content)
       const currentMessages = get(store);
       const apiMessages = currentMessages
         .filter(
           (m) =>
             m.role === 'user' || (m.role === 'assistant' && m.content)
         )
-        .slice(0, -1) // exclude the empty streaming message we just added
         .map((m) => ({ role: m.role, content: m.content }));
 
       await chatApi.chatStream(apiMessages);

@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import { theme } from '../stores/theme';
+  import { settings } from '../stores/settings';
 
   export let activeTab: string = 'record';
 
@@ -50,7 +52,7 @@
   </div>
 
   <div class="sidebar-footer">
-    <button class="footer-btn" on:click={() => theme.toggle()} title="Toggle theme">
+    <button class="footer-btn" on:click={() => { theme.toggle(); settings.updateField('theme', get(theme)); }} title="Toggle theme">
       <span>☀/🌙</span>
       <span>Theme</span>
     </button>
