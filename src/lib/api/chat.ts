@@ -10,7 +10,7 @@ export async function chatSend(
   model?: string,
   systemPrompt?: string
 ): Promise<string> {
-  return invoke('chat_send', { messages, model, system_prompt: systemPrompt });
+  return invoke('chat_send', { messages, model, systemPrompt });
 }
 
 export async function chatStream(
@@ -18,7 +18,7 @@ export async function chatStream(
   model?: string,
   systemPrompt?: string
 ): Promise<void> {
-  return invoke('chat_stream', { messages, model, system_prompt: systemPrompt });
+  return invoke('chat_stream', { messages, model, systemPrompt });
 }
 
 export async function chatWithAgent(
@@ -26,7 +26,7 @@ export async function chatWithAgent(
   agentName: string,
   conversationHistory?: ChatMessageInput[]
 ): Promise<any> {
-  return invoke('chat_with_agent', { message, agent_name: agentName, conversation_history: conversationHistory });
+  return invoke('chat_with_agent', { message, agentName, conversationHistory });
 }
 
 export async function listAiProviders(): Promise<string[]> {
