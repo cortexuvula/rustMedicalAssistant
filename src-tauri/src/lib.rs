@@ -41,6 +41,9 @@ pub fn run() {
             commands::generation::generate_referral,
             commands::generation::generate_letter,
             commands::generation::generate_synopsis,
+            commands::rag::ingest_document,
+            commands::rag::search_rag,
+            commands::rag::rag_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

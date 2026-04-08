@@ -13,11 +13,17 @@ use medical_ai_providers::ollama::OllamaProvider;
 use medical_ai_providers::ProviderRegistry;
 
 use medical_agents::orchestrator::AgentOrchestrator;
-use medical_agents::tools::ToolRegistry;
+use medical_agents::tools::{RagSearchTool, ToolRegistry};
 
 use medical_audio::capture::CaptureHandle;
 
 use medical_db::Database;
+
+use medical_rag::bm25::Bm25Search;
+use medical_rag::embeddings::EmbeddingGenerator;
+use medical_rag::graph_search::GraphSearch;
+use medical_rag::ingestion::IngestionPipeline;
+use medical_rag::vector_store::VectorStore;
 
 use medical_security::key_storage::KeyStorage;
 
@@ -60,6 +66,12 @@ pub struct AppState {
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
     pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
+    // RAG subsystem
+    pub embedding_generator: Arc<EmbeddingGenerator>,
+    pub vector_store: Arc<VectorStore>,
+    pub bm25_search: Arc<Bm25Search>,
+    pub graph_search: Arc<GraphSearch>,
+    pub ingestion: Arc<IngestionPipeline>,
 }
 
 /// Read saved API keys and register all available AI providers.
@@ -167,6 +179,7 @@ impl AppState {
 
         let db_path = data_dir.join("medical.db");
         let db = Database::open(&db_path)?;
+        let db = Arc::new(db);
 
         let config_dir = data_dir.join("config");
         let keys = KeyStorage::open(&config_dir)?;
@@ -175,12 +188,40 @@ impl AppState {
         let ai_providers = init_ai_providers(&keys);
         let stt_providers = init_stt_providers(&keys);
 
-        // Initialize the agent orchestrator with default tools
-        let tool_registry = ToolRegistry::with_defaults();
+        // --- RAG subsystem ---
+        // Create the embedding generator: prefer OpenAI if key exists, else Ollama
+        let embedding_generator = if let Ok(Some(key)) = keys.get_key("openai") {
+            info!("RAG: using OpenAI embeddings");
+            Arc::new(EmbeddingGenerator::new_openai(&key))
+        } else {
+            info!("RAG: using Ollama embeddings (local)");
+            Arc::new(EmbeddingGenerator::new_ollama(None, None))
+        };
+
+        let vector_store = Arc::new(VectorStore::new(Arc::clone(&db)));
+        let bm25_search = Arc::new(Bm25Search::new(Arc::clone(&db)));
+        let graph_search = Arc::new(GraphSearch::new(Arc::clone(&db)));
+        let ingestion = Arc::new(IngestionPipeline::new(
+            Arc::clone(&embedding_generator),
+            Arc::clone(&vector_store),
+            Arc::clone(&graph_search),
+        ));
+
+        info!("RAG subsystem initialized");
+
+        // Initialize the agent orchestrator with tools, including RAG-connected search
+        let mut tool_registry = ToolRegistry::with_defaults();
+        // Replace the default unconfigured RagSearchTool with a real one
+        let rag_tool = RagSearchTool::with_rag(
+            Arc::clone(&embedding_generator),
+            Arc::clone(&vector_store),
+            Arc::clone(&bm25_search),
+        );
+        tool_registry.register(Arc::new(rag_tool));
         let orchestrator = AgentOrchestrator::new(tool_registry);
 
         Ok(Self {
-            db: Arc::new(db),
+            db,
             keys: Arc::new(keys),
             data_dir,
             recording_active: Arc::new(Mutex::new(false)),
@@ -188,8 +229,12 @@ impl AppState {
             stt_providers: Arc::new(Mutex::new(stt_providers.map(Arc::new))),
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
-
             current_recording: Arc::new(std::sync::Mutex::new(None)),
+            embedding_generator,
+            vector_store,
+            bm25_search,
+            graph_search,
+            ingestion,
         })
     }
 }

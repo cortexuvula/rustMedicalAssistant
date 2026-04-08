@@ -53,7 +53,7 @@ impl ToolRegistry {
         registry.register(Arc::new(IcdLookupTool));
         registry.register(Arc::new(DrugInteractionTool));
         registry.register(Arc::new(VitalsExtractorTool));
-        registry.register(Arc::new(RagSearchTool));
+        registry.register(Arc::new(RagSearchTool::new()));
         registry.register(Arc::new(ChecklistTool));
         registry
     }

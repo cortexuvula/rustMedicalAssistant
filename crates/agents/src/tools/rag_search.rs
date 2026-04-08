@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use medical_core::{
     error::AppResult,
@@ -5,10 +7,52 @@ use medical_core::{
     types::{ToolDef, ToolOutput},
 };
 use serde_json::json;
+use tracing::info;
+
+use medical_rag::bm25::Bm25Search;
+use medical_rag::embeddings::EmbeddingGenerator;
+use medical_rag::fusion::reciprocal_rank_fusion;
+use medical_rag::vector_store::VectorStore;
 
 /// Tool for querying the medical knowledge base (RAG system).
-/// Currently returns empty results until connected to the RAG crate.
-pub struct RagSearchTool;
+///
+/// When constructed with `new()`, returns a stub "not configured" message.
+/// When constructed with `with_rag(...)`, performs real hybrid search:
+/// embed -> vector search + BM25 -> reciprocal rank fusion -> results.
+pub struct RagSearchTool {
+    embeddings: Option<Arc<EmbeddingGenerator>>,
+    vector_store: Option<Arc<VectorStore>>,
+    bm25: Option<Arc<Bm25Search>>,
+}
+
+impl RagSearchTool {
+    /// Create an unconfigured tool that returns a "not connected" message.
+    pub fn new() -> Self {
+        Self {
+            embeddings: None,
+            vector_store: None,
+            bm25: None,
+        }
+    }
+
+    /// Create a tool wired to real RAG backends.
+    pub fn with_rag(
+        embeddings: Arc<EmbeddingGenerator>,
+        vector_store: Arc<VectorStore>,
+        bm25: Arc<Bm25Search>,
+    ) -> Self {
+        Self {
+            embeddings: Some(embeddings),
+            vector_store: Some(vector_store),
+            bm25: Some(bm25),
+        }
+    }
+
+    /// Whether this tool is connected to a real RAG backend.
+    pub fn is_configured(&self) -> bool {
+        self.embeddings.is_some() && self.vector_store.is_some() && self.bm25.is_some()
+    }
+}
 
 #[async_trait]
 impl Tool for RagSearchTool {
@@ -45,14 +89,71 @@ impl Tool for RagSearchTool {
         let top_k = arguments
             .get("top_k")
             .and_then(|v| v.as_u64())
-            .unwrap_or(5);
+            .unwrap_or(5) as usize;
 
-        // Stub: returns empty results until connected to actual RAG crate
+        // If RAG is not configured, return an informational stub
+        if !self.is_configured() {
+            let content = serde_json::to_string_pretty(&json!({
+                "query": query,
+                "top_k": top_k,
+                "results": [],
+                "note": "Knowledge base search is not yet connected. Results will be available once the RAG system is initialized."
+            }))
+            .unwrap_or_else(|_| "serialization error".into());
+
+            return Ok(ToolOutput::success(content));
+        }
+
+        let embeddings = self.embeddings.as_ref().unwrap();
+        let vector_store = self.vector_store.as_ref().unwrap();
+        let bm25 = self.bm25.as_ref().unwrap();
+
+        // 1. Embed the query
+        let query_embedding = embeddings.embed(query).await?;
+
+        // 2. Search vector store (request extra to allow for fusion/reranking)
+        let fetch_k = top_k * 2;
+        let vector_results = vector_store
+            .search(&query_embedding, fetch_k, 0.3)
+            .map_err(|e| medical_core::error::AppError::Rag(format!("Vector search: {e}")))?;
+
+        // 3. Search BM25
+        let bm25_results = bm25
+            .search(query, fetch_k)
+            .map_err(|e| medical_core::error::AppError::Rag(format!("BM25 search: {e}")))?;
+
+        info!(
+            "RAG search for '{}': {} vector results, {} BM25 results",
+            query,
+            vector_results.len(),
+            bm25_results.len()
+        );
+
+        // 4. Fuse results with Reciprocal Rank Fusion (k=60)
+        let mut fused = reciprocal_rank_fusion(&[vector_results, bm25_results], 60.0);
+
+        // 5. Truncate to top_k
+        fused.truncate(top_k);
+
+        // 6. Serialize results
+        let result_json: Vec<serde_json::Value> = fused
+            .iter()
+            .map(|r| {
+                json!({
+                    "content": r.content,
+                    "score": r.score,
+                    "source": r.source,
+                    "chunk_id": r.chunk_id.to_string(),
+                    "metadata": r.metadata,
+                })
+            })
+            .collect();
+
         let content = serde_json::to_string_pretty(&json!({
             "query": query,
             "top_k": top_k,
-            "results": [],
-            "note": "Knowledge base search is not yet connected. Results will be available once the RAG system is initialized."
+            "results": result_json,
+            "count": result_json.len(),
         }))
         .unwrap_or_else(|_| "serialization error".into());
 
@@ -65,8 +166,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn returns_empty_results_stub() {
-        let tool = RagSearchTool;
+    async fn returns_empty_results_when_unconfigured() {
+        let tool = RagSearchTool::new();
         let result = tool
             .execute(json!({"query": "hypertension treatment guidelines"}))
             .await
@@ -74,11 +175,12 @@ mod tests {
         assert!(!result.is_error);
         let parsed: serde_json::Value = serde_json::from_str(&result.content).unwrap();
         assert!(parsed["results"].as_array().unwrap().is_empty());
+        assert!(parsed["note"].as_str().unwrap().contains("not yet connected"));
     }
 
     #[tokio::test]
     async fn respects_top_k_parameter() {
-        let tool = RagSearchTool;
+        let tool = RagSearchTool::new();
         let result = tool
             .execute(json!({"query": "diabetes management", "top_k": 10}))
             .await
@@ -90,7 +192,21 @@ mod tests {
 
     #[test]
     fn tool_definition_has_correct_name() {
-        let tool = RagSearchTool;
+        let tool = RagSearchTool::new();
         assert_eq!(tool.definition().name, "search_knowledge_base");
+    }
+
+    #[test]
+    fn new_creates_unconfigured_tool() {
+        let tool = RagSearchTool::new();
+        assert!(!tool.is_configured());
+    }
+
+    #[test]
+    fn missing_query_returns_error() {
+        let tool = RagSearchTool::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(tool.execute(json!({}))).unwrap();
+        assert!(result.is_error);
     }
 }
