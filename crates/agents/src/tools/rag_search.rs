@@ -25,6 +25,12 @@ pub struct RagSearchTool {
     bm25: Option<Arc<Bm25Search>>,
 }
 
+impl Default for RagSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RagSearchTool {
     /// Create an unconfigured tool that returns a "not connected" message.
     pub fn new() -> Self {

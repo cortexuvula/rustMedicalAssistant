@@ -56,6 +56,8 @@ pub struct CurrentRecording {
     pub started_at: Instant,
 }
 
+
+#[allow(dead_code)]
 pub struct AppState {
     pub db: Arc<Database>,
     pub keys: Arc<KeyStorage>,

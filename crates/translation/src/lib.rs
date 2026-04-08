@@ -1,5 +1,6 @@
 pub mod session;
 pub mod canned_responses;
+pub mod ai_translator;
 
 use thiserror::Error;
 

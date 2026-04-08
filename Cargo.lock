@@ -3097,6 +3097,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "medical-core",
+ "medical-rag",
  "regex",
  "serde",
  "serde_json",
