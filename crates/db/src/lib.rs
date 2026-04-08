@@ -7,6 +7,9 @@ pub mod settings;
 pub mod audit;
 pub mod search;
 pub mod vectors;
+// NOTE: graph module requires the `cozo` crate which currently has upstream
+// build issues.  Feature-gated until Task 8 resolves the dependency conflict.
+#[cfg(feature = "graph")]
 pub mod graph;
 
 use std::path::Path;
@@ -27,6 +30,8 @@ pub enum DbError {
     NotFound(String),
     #[error("Constraint violation: {0}")]
     Constraint(String),
+    #[error("Graph error: {0}")]
+    Graph(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
