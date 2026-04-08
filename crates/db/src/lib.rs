@@ -7,8 +7,9 @@ pub mod settings;
 pub mod audit;
 pub mod search;
 pub mod vectors;
-// NOTE: graph module requires the `cozo` crate which currently has upstream
-// build issues.  Feature-gated until Task 8 resolves the dependency conflict.
+// CozoDB-backed knowledge graph. Gated behind the `graph` feature because cozo
+// uses the Sled storage engine and brings in a non-trivial dependency tree.
+// Enable with: cargo build -p medical-db --features graph
 #[cfg(feature = "graph")]
 pub mod graph;
 
