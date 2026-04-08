@@ -31,6 +31,7 @@ use medical_stt_providers::deepgram::DeepgramProvider;
 use medical_stt_providers::elevenlabs_stt::ElevenLabsSttProvider;
 use medical_stt_providers::failover::SttFailover;
 use medical_stt_providers::groq_whisper::GroqWhisperProvider;
+use medical_stt_providers::modulate::ModulateProvider;
 
 use medical_core::traits::SttProvider;
 
@@ -159,6 +160,19 @@ pub fn init_stt_providers(keys: &KeyStorage) -> Option<SttFailover> {
             }
             Err(e) => {
                 tracing::warn!("Failed to create ElevenLabs STT provider: {e}");
+            }
+        }
+    }
+
+    // Modulate
+    if let Ok(Some(key)) = keys.get_key("modulate") {
+        match ModulateProvider::new(&key) {
+            Ok(provider) => {
+                info!("Adding Modulate to STT failover chain");
+                chain.push(Arc::new(provider));
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create Modulate STT provider: {e}");
             }
         }
     }

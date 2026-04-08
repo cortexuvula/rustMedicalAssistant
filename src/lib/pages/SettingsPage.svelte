@@ -15,6 +15,7 @@
     { id: 'cerebras', label: 'Cerebras' },
     { id: 'deepgram', label: 'Deepgram' },
     { id: 'elevenlabs', label: 'ElevenLabs' },
+    { id: 'modulate', label: 'Modulate' },
   ];
 
   let storedKeys = $state<string[]>([]);
@@ -258,6 +259,8 @@
               <option value="deepgram">Deepgram</option>
               <option value="groq">Groq Whisper</option>
               <option value="elevenlabs">ElevenLabs</option>
+              <option value="modulate">Modulate</option>
+              <option value="whisper-local">Whisper (Local)</option>
             </select>
           </div>
 
