@@ -3,6 +3,10 @@ name = "medical-tts-providers"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+local-tts = ["tts"]
+
 [dependencies]
 medical-core = { path = "../core" }
 reqwest = { workspace = true }
@@ -12,6 +16,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+tts = { version = "0.26", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

@@ -3,6 +3,10 @@ name = "medical-stt-providers"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+local-stt = ["whisper-rs"]
+
 [dependencies]
 medical-core = { path = "../core" }
 reqwest = { workspace = true }
@@ -14,6 +18,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
+whisper-rs = { version = "0.16", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
