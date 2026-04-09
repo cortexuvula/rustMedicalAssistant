@@ -67,9 +67,9 @@
   <footer class="app-statusbar">
     <StatusBar />
   </footer>
-
-  <SettingsDialog bind:open={settingsOpen} />
 </div>
+
+<SettingsDialog bind:open={settingsOpen} />
 
 <style>
   .app-shell {
