@@ -6,6 +6,7 @@
 
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
+  import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
@@ -13,9 +14,20 @@
   import GenerateTab from './lib/pages/GenerateTab.svelte';
   import ChatTab from './lib/pages/ChatTab.svelte';
   import EditorTab from './lib/pages/EditorTab.svelte';
-  import SettingsPage from './lib/pages/SettingsPage.svelte';
 
   let activeTab = $state('record');
+  let settingsOpen = $state(false);
+  let previousTab = $state('record');
+
+  // Intercept settings tab — open modal instead of navigating
+  $effect(() => {
+    if (activeTab === 'settings') {
+      settingsOpen = true;
+      activeTab = previousTab;
+    } else {
+      previousTab = activeTab;
+    }
+  });
 
   onMount(async () => {
     await settings.load();
@@ -49,14 +61,14 @@
       <EditorTab tabId="referral" />
     {:else if activeTab === 'letter'}
       <EditorTab tabId="letter" />
-    {:else if activeTab === 'settings'}
-      <SettingsPage />
     {/if}
   </main>
 
   <footer class="app-statusbar">
     <StatusBar />
   </footer>
+
+  <SettingsDialog bind:open={settingsOpen} />
 </div>
 
 <style>
