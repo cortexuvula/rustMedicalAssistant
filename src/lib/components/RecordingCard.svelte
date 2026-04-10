@@ -4,6 +4,7 @@
   export let recording: RecordingSummary;
   export let selected: boolean = false;
   export let onClick: () => void = () => {};
+  export let onDelete: (() => void) | null = null;
 
   function formatDate(iso: string): string {
     const d = new Date(iso);
@@ -71,6 +72,16 @@
       <span class="badge" title="Referral">R</span>
     {/if}
   </div>
+
+  {#if onDelete}
+    <button
+      class="btn-delete"
+      title="Delete recording"
+      on:click|stopPropagation={onDelete}
+    >
+      ×
+    </button>
+  {/if}
 </button>
 
 <style>
@@ -142,5 +153,29 @@
     background-color: var(--accent-light);
     color: var(--accent);
     border: 1px solid var(--accent);
+  }
+
+  .btn-delete {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: transparent;
+    flex-shrink: 0;
+    transition: color 0.15s ease, background-color 0.15s ease;
+  }
+
+  .recording-card:hover .btn-delete {
+    display: inline-flex;
+  }
+
+  .btn-delete:hover {
+    color: var(--danger, #ef4444);
+    background-color: rgba(239, 68, 68, 0.1);
   }
 </style>

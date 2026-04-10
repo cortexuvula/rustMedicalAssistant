@@ -34,6 +34,7 @@
           recording={rec}
           selected={$selectedRecording?.id === rec.id}
           onClick={() => selectRecording(rec.id)}
+          onDelete={() => { if (confirm(`Delete "${rec.patient_name || rec.filename}"?`)) recordings.remove(rec.id); }}
         />
       {/each}
     {/if}
