@@ -278,3 +278,20 @@ pub async fn set_active_provider(
     let mut registry = state.ai_providers.lock().await;
     Ok(registry.set_active(&name))
 }
+
+/// Fetch available models for a given provider (or active provider if name is None).
+#[tauri::command]
+pub async fn list_models(
+    state: tauri::State<'_, AppState>,
+    provider_name: Option<String>,
+) -> Result<Vec<medical_core::types::ModelInfo>, String> {
+    let provider = {
+        let registry = state.ai_providers.lock().await;
+        match provider_name {
+            Some(name) => registry.get_arc(&name),
+            None => registry.get_active_arc(),
+        }
+    };
+    let provider = provider.ok_or("Provider not found or not configured")?;
+    provider.available_models().await.map_err(|e| e.to_string())
+}

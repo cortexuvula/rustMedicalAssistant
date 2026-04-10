@@ -35,6 +35,7 @@ pub fn run() {
             commands::chat::chat_with_agent,
             commands::chat::list_ai_providers,
             commands::chat::set_active_provider,
+            commands::chat::list_models,
             commands::transcription::transcribe_recording,
             commands::transcription::list_stt_providers,
             commands::generation::generate_soap,

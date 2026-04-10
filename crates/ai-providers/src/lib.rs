@@ -38,6 +38,10 @@ impl ProviderRegistry {
     pub fn active(&self) -> Option<&dyn AiProvider> { self.get(&self.active) }
     /// Returns the name of the currently active provider.
     pub fn active_name(&self) -> &str { &self.active }
+    /// Returns a cloned `Arc` of a named provider, suitable for use across await points.
+    pub fn get_arc(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+        self.providers.get(name).cloned()
+    }
     /// Returns a cloned `Arc` of the active provider, suitable for use across await points.
     pub fn get_active_arc(&self) -> Option<Arc<dyn AiProvider>> {
         self.providers.get(&self.active).cloned()

@@ -4,6 +4,7 @@
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
   import { listApiKeys, setApiKey } from '../api/settings';
+  import { listModels, type ModelInfo } from '../api/chat';
 
   interface Props {
     open: boolean;
@@ -42,6 +43,8 @@
     } catch (err) {
       console.error('Failed to list API keys:', err);
     }
+    // Fetch available models for the current provider
+    await fetchModelsForProvider($settings.ai_provider);
   });
 
   async function handleSaveApiKey(provider: string) {
@@ -86,50 +89,28 @@
     }
   }
 
-  const MODELS_BY_PROVIDER: Record<string, { id: string; label: string }[]> = {
-    openai: [
-      { id: 'gpt-4o', label: 'GPT-4o' },
-      { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
-      { id: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-      { id: 'o3-mini', label: 'o3-mini' },
-    ],
-    anthropic: [
-      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-      { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-    ],
-    gemini: [
-      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-    ],
-    groq: [
-      { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B' },
-      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B' },
-      { id: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
-    ],
-    cerebras: [
-      { id: 'llama-3.3-70b', label: 'Llama 3.3 70B' },
-      { id: 'llama-3.1-8b', label: 'Llama 3.1 8B' },
-    ],
-    ollama: [
-      { id: 'llama3.2', label: 'Llama 3.2' },
-      { id: 'mistral', label: 'Mistral' },
-      { id: 'gemma2', label: 'Gemma 2' },
-      { id: 'qwen2.5', label: 'Qwen 2.5' },
-    ],
-  };
+  let availableModels = $state<ModelInfo[]>([]);
+  let modelsLoading = $state(false);
 
-  function getModelsForProvider(provider: string) {
-    return MODELS_BY_PROVIDER[provider] || [];
+  async function fetchModelsForProvider(provider: string) {
+    modelsLoading = true;
+    try {
+      availableModels = await listModels(provider);
+    } catch (e) {
+      console.error('Failed to fetch models:', e);
+      availableModels = [];
+    } finally {
+      modelsLoading = false;
+    }
   }
 
   async function handleAiProviderChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
     await settings.updateField('ai_provider', value);
+    await fetchModelsForProvider(value);
     // Auto-select first model for the new provider
-    const models = getModelsForProvider(value);
-    if (models.length > 0) {
-      await settings.updateField('ai_model', models[0].id);
+    if (availableModels.length > 0) {
+      await settings.updateField('ai_model', availableModels[0].id);
     }
   }
 
@@ -285,12 +266,16 @@
               id="ai-model"
               value={$settings.ai_model}
               onchange={handleAiModelChange}
+              disabled={modelsLoading}
             >
-              {#each getModelsForProvider($settings.ai_provider) as model}
-                <option value={model.id}>{model.label}</option>
-              {/each}
-              {#if getModelsForProvider($settings.ai_provider).length === 0}
+              {#if modelsLoading}
+                <option value="">Loading models…</option>
+              {:else if availableModels.length === 0}
                 <option value="">No models available</option>
+              {:else}
+                {#each availableModels as model}
+                  <option value={model.id}>{model.name}</option>
+                {/each}
               {/if}
             </select>
           </div>

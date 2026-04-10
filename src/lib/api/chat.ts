@@ -40,3 +40,16 @@ export async function setActiveProvider(name: string): Promise<boolean> {
 export async function reinitProviders(): Promise<string[]> {
   return invoke('reinit_providers');
 }
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  max_tokens: number;
+  supports_tools: boolean;
+  supports_streaming: boolean;
+}
+
+export async function listModels(providerName?: string): Promise<ModelInfo[]> {
+  return invoke('list_models', { providerName });
+}
