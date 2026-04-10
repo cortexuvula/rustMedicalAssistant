@@ -68,20 +68,31 @@ fn parse_soap_template(s: &str) -> SoapTemplate {
     }
 }
 
+/// Load the user's AI model and temperature from saved settings.
+fn load_ai_settings(state: &AppState) -> (String, f32) {
+    let conn = state.db.conn().ok();
+    let config = conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok());
+    match config {
+        Some(cfg) => (cfg.ai_model, cfg.temperature),
+        None => ("gpt-4o".to_string(), 0.4),
+    }
+}
+
 /// Build a single-turn `CompletionRequest` from system and user prompts.
 fn build_completion_request(
     system_prompt: String,
     user_prompt: String,
-    model: Option<String>,
+    model: String,
+    temperature: f32,
 ) -> CompletionRequest {
     CompletionRequest {
-        model: model.unwrap_or_else(|| "gpt-4o".to_string()),
+        model,
         messages: vec![Message {
             role: Role::User,
             content: MessageContent::Text(user_prompt),
             tool_calls: vec![],
         }],
-        temperature: Some(0.4),
+        temperature: Some(temperature),
         max_tokens: Some(4096),
         system_prompt: Some(system_prompt),
     }
@@ -171,7 +182,8 @@ async fn generate_soap_inner(
         recording_id,
     );
 
-    let request = build_completion_request(system_prompt, user_prompt, None);
+    let (model, temperature) = load_ai_settings(state);
+    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
 
     let response = provider
         .complete(request)
@@ -275,7 +287,8 @@ async fn generate_referral_inner(
         urg,
     );
 
-    let request = build_completion_request(system_prompt, user_prompt, None);
+    let (model, temperature) = load_ai_settings(state);
+    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
 
     let response = provider
         .complete(request)
@@ -370,7 +383,8 @@ async fn generate_letter_inner(
         ltype,
     );
 
-    let request = build_completion_request(system_prompt, user_prompt, None);
+    let (model, temperature) = load_ai_settings(state);
+    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
 
     let response = provider
         .complete(request)
@@ -418,7 +432,8 @@ pub async fn generate_synopsis(
         recording_id,
     );
 
-    let request = build_completion_request(system_prompt, user_prompt, None);
+    let (model, temperature) = load_ai_settings(&*state);
+    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
 
     let response = provider
         .complete(request)

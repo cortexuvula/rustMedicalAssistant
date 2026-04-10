@@ -86,9 +86,56 @@
     }
   }
 
+  const MODELS_BY_PROVIDER: Record<string, { id: string; label: string }[]> = {
+    openai: [
+      { id: 'gpt-4o', label: 'GPT-4o' },
+      { id: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+      { id: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+      { id: 'o3-mini', label: 'o3-mini' },
+    ],
+    anthropic: [
+      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+      { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+      { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    ],
+    gemini: [
+      { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    ],
+    groq: [
+      { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B' },
+      { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B' },
+      { id: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+    ],
+    cerebras: [
+      { id: 'llama-3.3-70b', label: 'Llama 3.3 70B' },
+      { id: 'llama-3.1-8b', label: 'Llama 3.1 8B' },
+    ],
+    ollama: [
+      { id: 'llama3.2', label: 'Llama 3.2' },
+      { id: 'mistral', label: 'Mistral' },
+      { id: 'gemma2', label: 'Gemma 2' },
+      { id: 'qwen2.5', label: 'Qwen 2.5' },
+    ],
+  };
+
+  function getModelsForProvider(provider: string) {
+    return MODELS_BY_PROVIDER[provider] || [];
+  }
+
   async function handleAiProviderChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
     await settings.updateField('ai_provider', value);
+    // Auto-select first model for the new provider
+    const models = getModelsForProvider(value);
+    if (models.length > 0) {
+      await settings.updateField('ai_model', models[0].id);
+    }
+  }
+
+  async function handleAiModelChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value;
+    await settings.updateField('ai_model', value);
   }
 
   async function handleTemperatureChange(e: Event) {
@@ -229,6 +276,22 @@
               <option value="groq">Groq</option>
               <option value="cerebras">Cerebras</option>
               <option value="ollama">Ollama</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="ai-model" class="form-label">Model</label>
+            <select
+              id="ai-model"
+              value={$settings.ai_model}
+              onchange={handleAiModelChange}
+            >
+              {#each getModelsForProvider($settings.ai_provider) as model}
+                <option value={model.id}>{model.label}</option>
+              {/each}
+              {#if getModelsForProvider($settings.ai_provider).length === 0}
+                <option value="">No models available</option>
+              {/if}
             </select>
           </div>
 
