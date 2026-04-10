@@ -41,10 +41,13 @@
   }
 </script>
 
-<button
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div
   class="recording-card"
   class:selected
   on:click={onClick}
+  role="button"
+  tabindex="0"
 >
   <div class="card-status" style="color: {statusColor(recording.status)}">
     {statusIcon(recording.status)}
@@ -82,7 +85,7 @@
       ×
     </button>
   {/if}
-</button>
+</div>
 
 <style>
   .recording-card {
@@ -95,6 +98,7 @@
     text-align: left;
     transition: background-color 0.1s ease;
     background-color: transparent;
+    cursor: pointer;
   }
 
   .recording-card:hover {
