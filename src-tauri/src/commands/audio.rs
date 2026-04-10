@@ -40,9 +40,11 @@ pub async fn start_recording(
     let recordings_dir = state.data_dir.join("recordings");
     std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
 
-    // Generate UUID and output path.
+    // Generate UUID and human-readable filename.
     let recording_id = Uuid::new_v4();
-    let wav_path = recordings_dir.join(format!("{}.wav", recording_id));
+    let now = chrono::Local::now();
+    let friendly_name = now.format("Recording_%Y-%m-%d_%H-%M-%S").to_string();
+    let wav_path = recordings_dir.join(format!("{}.wav", friendly_name));
 
     // Start capture on a dedicated std::thread so the !Send CaptureHandle
     // never crosses a thread boundary via tokio::spawn_blocking.  We wrap

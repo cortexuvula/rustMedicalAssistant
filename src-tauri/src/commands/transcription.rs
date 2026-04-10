@@ -72,11 +72,8 @@ pub async fn transcribe_recording(
     };
     RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
 
-    // Build the WAV file path and load audio data.
-    let wav_path = state
-        .data_dir
-        .join("recordings")
-        .join(format!("{recording_id}.wav"));
+    // Use the audio_path stored in the recording (supports any filename format).
+    let wav_path = recording.audio_path.clone();
 
     if !wav_path.exists() {
         let err_msg = format!("WAV file not found: {}", wav_path.display());
