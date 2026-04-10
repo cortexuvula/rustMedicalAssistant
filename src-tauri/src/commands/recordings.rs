@@ -1,6 +1,7 @@
 use medical_core::types::recording::{Recording, RecordingSummary};
 use medical_db::recordings::RecordingsRepo;
 use medical_db::search::SearchRepo;
+use medical_db::vectors::VectorsRepo;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -44,5 +45,22 @@ pub fn delete_recording(
 ) -> Result<(), String> {
     let uuid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
     let conn = state.db.conn().map_err(|e| e.to_string())?;
-    RecordingsRepo::delete(&conn, &uuid).map_err(|e| e.to_string())
+
+    // Get the recording first so we can clean up the WAV file
+    let recording = RecordingsRepo::get_by_id(&conn, &uuid).ok();
+
+    // Delete RAG chunks indexed from this recording
+    let _ = VectorsRepo::delete_by_document(&conn, &id);
+
+    // Delete the DB row (transcript, SOAP, referral, letter are all columns)
+    RecordingsRepo::delete(&conn, &uuid).map_err(|e| e.to_string())?;
+
+    // Delete the WAV file from disk
+    if let Some(rec) = recording {
+        if rec.audio_path.exists() {
+            let _ = std::fs::remove_file(&rec.audio_path);
+        }
+    }
+
+    Ok(())
 }
