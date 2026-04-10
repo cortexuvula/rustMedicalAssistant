@@ -7,6 +7,7 @@
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
+  import { selectedRecording } from './lib/stores/recordings';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
@@ -45,6 +46,13 @@
   </aside>
 
   <main class="app-content">
+    {#if $selectedRecording}
+      <div class="selected-recording-banner">
+        <span class="banner-icon">🎙</span>
+        <span class="banner-name">{$selectedRecording.patient_name || $selectedRecording.filename}</span>
+        <span class="banner-meta">{new Date($selectedRecording.created_at).toLocaleDateString()}</span>
+      </div>
+    {/if}
     {#if activeTab === 'record'}
       <RecordTab />
     {:else if activeTab === 'recordings'}
@@ -98,5 +106,34 @@
   .app-statusbar {
     grid-column: 1 / -1;
     grid-row: 2;
+  }
+
+  .selected-recording-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  .banner-icon {
+    font-size: 14px;
+  }
+
+  .banner-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .banner-meta {
+    color: var(--text-muted);
+    margin-left: auto;
+    flex-shrink: 0;
   }
 </style>
