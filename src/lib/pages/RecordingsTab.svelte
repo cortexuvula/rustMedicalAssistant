@@ -3,10 +3,23 @@
   import { recordings, loading, selectedRecording, selectRecording } from '../stores/recordings';
   import SearchBar from '../components/SearchBar.svelte';
   import RecordingCard from '../components/RecordingCard.svelte';
+  import ConfirmDialog from '../components/ConfirmDialog.svelte';
+
+  let deleteTarget = $state<{ id: string; name: string } | null>(null);
 
   onMount(() => {
     recordings.load();
   });
+
+  function requestDelete(id: string, name: string) {
+    deleteTarget = { id, name };
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await recordings.remove(deleteTarget.id);
+    deleteTarget = null;
+  }
 </script>
 
 <div class="recordings-tab">
@@ -34,12 +47,21 @@
           recording={rec}
           selected={$selectedRecording?.id === rec.id}
           onClick={() => selectRecording(rec.id)}
-          onDelete={() => { if (confirm(`Delete "${rec.patient_name || rec.filename}"?`)) recordings.remove(rec.id); }}
+          onDelete={() => requestDelete(rec.id, rec.patient_name || rec.filename)}
         />
       {/each}
     {/if}
   </div>
 </div>
+
+<ConfirmDialog
+  open={deleteTarget !== null}
+  title="Delete Recording"
+  message={deleteTarget ? `This will permanently delete "${deleteTarget.name}" including its audio file, transcript, SOAP note, and all generated documents.` : ''}
+  confirmLabel="Delete"
+  onConfirm={confirmDelete}
+  onCancel={() => deleteTarget = null}
+/>
 
 <style>
   .recordings-tab {
