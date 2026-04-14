@@ -142,6 +142,23 @@ function createAudioStore() {
       }
     },
 
+    async cancel() {
+      if (busy) return;
+      busy = true;
+      clearTimer();
+      try {
+        await audioApi.cancelRecording();
+      } catch (_e: any) {
+        // Best-effort — even if backend fails, reset the frontend state
+      }
+      if (waveformUnlisten) {
+        waveformUnlisten();
+        waveformUnlisten = null;
+      }
+      set(initialState);
+      busy = false;
+    },
+
     reset() {
       clearTimer();
       if (waveformUnlisten) {

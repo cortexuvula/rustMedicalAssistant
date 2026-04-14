@@ -34,12 +34,18 @@
         <button class="btn btn-stop" onclick={() => audio.stop()}>
           <span class="btn-icon">■</span> Stop
         </button>
+        <button class="btn btn-cancel" onclick={() => audio.cancel()}>
+          <span class="btn-icon">✕</span> Cancel
+        </button>
       {:else if $audio.state === 'paused'}
         <button class="btn btn-resume" onclick={() => audio.resume()}>
           <span class="btn-icon">▶</span> Resume
         </button>
         <button class="btn btn-stop" onclick={() => audio.stop()}>
           <span class="btn-icon">■</span> Stop
+        </button>
+        <button class="btn btn-cancel" onclick={() => audio.cancel()}>
+          <span class="btn-icon">✕</span> Cancel
         </button>
       {:else if $audio.state === 'stopped'}
         <button class="btn btn-new" onclick={() => audio.reset()}>
@@ -154,6 +160,18 @@
   .btn-resume {
     background-color: var(--success);
     color: white;
+  }
+
+  .btn-cancel {
+    background-color: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+  }
+
+  .btn-cancel:hover:not(:disabled) {
+    background-color: var(--danger);
+    color: white;
+    filter: none;
   }
 
   .btn-new {

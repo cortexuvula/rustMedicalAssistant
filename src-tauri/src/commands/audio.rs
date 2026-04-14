@@ -195,7 +195,56 @@ pub async fn stop_recording(
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 4. pause_recording
+// 4. cancel_recording
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Cancel the current recording, discarding the audio file without saving.
+#[tauri::command]
+pub async fn cancel_recording(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    // Take the CaptureHandle out of AppState.
+    let wrapper = {
+        let mut handle_lock = state.capture_handle.lock().unwrap();
+        let inner = handle_lock.0.take();
+        SendCaptureHandle(inner)
+    };
+
+    if wrapper.0.is_none() {
+        return Err("No active recording to cancel".into());
+    }
+
+    // Drop the capture handle on a dedicated thread.
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        drop(wrapper);
+        let _ = tx.send(());
+    });
+    rx.recv().map_err(|_| "Cancel thread panicked".to_string())?;
+
+    // Set recording inactive.
+    {
+        let mut active = state.recording_active.lock().await;
+        *active = false;
+    }
+
+    // Take the current recording info and delete the WAV file.
+    let current = {
+        let mut rec_lock = state.current_recording.lock().unwrap();
+        rec_lock.take()
+    };
+
+    if let Some(current) = current {
+        if current.wav_path.exists() {
+            let _ = std::fs::remove_file(&current.wav_path);
+        }
+    }
+
+    Ok(())
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 5. pause_recording
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -211,7 +260,7 @@ pub fn pause_recording(state: tauri::State<'_, AppState>) -> Result<(), String> 
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 5. resume_recording
+// 6. resume_recording
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]

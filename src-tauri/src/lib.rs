@@ -30,6 +30,7 @@ pub fn run() {
             commands::audio::list_audio_devices,
             commands::audio::start_recording,
             commands::audio::stop_recording,
+            commands::audio::cancel_recording,
             commands::audio::pause_recording,
             commands::audio::resume_recording,
             commands::chat::chat_send,

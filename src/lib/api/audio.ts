@@ -13,6 +13,10 @@ export async function stopRecording(): Promise<string> {
   return invoke('stop_recording');
 }
 
+export async function cancelRecording(): Promise<void> {
+  return invoke('cancel_recording');
+}
+
 export async function pauseRecording(): Promise<void> {
   return invoke('pause_recording');
 }
