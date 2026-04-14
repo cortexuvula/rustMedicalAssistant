@@ -1,7 +1,7 @@
 [package]
 name = "rust-medical-assistant"
 version = "0.1.0"
-description = "Rust Medical Assistant"
+description = "FerriScribe"
 authors = []
 edition = "2024"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the application icon for Rust Medical Assistant.
+"""Generate the application icon for FerriScribe.
 
 Produces a 1024x1024 PNG that can be fed to `npx tauri icon` to create
 all platform-specific icon variants.

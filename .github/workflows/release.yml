@@ -74,7 +74,7 @@ jobs:
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Rust Medical Assistant ${{ github.ref_name }}'
+          releaseName: 'FerriScribe ${{ github.ref_name }}'
           releaseBody: 'See the assets below to download and install this version.'
           releaseDraft: false
           prerelease: false

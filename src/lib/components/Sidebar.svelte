@@ -22,7 +22,7 @@
 
 <aside class="sidebar">
   <div class="sidebar-top">
-    <div class="app-title">Medical Assistant</div>
+    <div class="app-title">FerriScribe</div>
 
     <nav>
       <div class="nav-section-label">Workflow</div>
