@@ -32,31 +32,31 @@ impl AiProvider for GroqProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        // Groq's /models endpoint only returns usable models — no filtering needed.
+        // Exclude whisper/distil audio models since they aren't chat models.
+        if let Ok(ids) = self.client.list_models().await {
+            let mut models: Vec<ModelInfo> = ids
+                .into_iter()
+                .filter(|id| !id.contains("whisper") && !id.contains("distil"))
+                .map(|id| ModelInfo {
+                    name: id.clone(),
+                    id,
+                    provider: "groq".into(),
+                    max_tokens: 32_768,
+                    supports_tools: true,
+                    supports_streaming: true,
+                })
+                .collect();
+            if !models.is_empty() {
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                return Ok(models);
+            }
+        }
+
+        // Fallback
         Ok(vec![
-            ModelInfo {
-                id: "llama-3.3-70b-versatile".into(),
-                name: "LLaMA 3.3 70B Versatile".into(),
-                provider: "groq".into(),
-                max_tokens: 32_768,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "mixtral-8x7b-32768".into(),
-                name: "Mixtral 8x7B".into(),
-                provider: "groq".into(),
-                max_tokens: 32_768,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "gemma2-9b-it".into(),
-                name: "Gemma 2 9B IT".into(),
-                provider: "groq".into(),
-                max_tokens: 8_192,
-                supports_tools: false,
-                supports_streaming: true,
-            },
+            ModelInfo { id: "llama-3.3-70b-versatile".into(), name: "llama-3.3-70b-versatile".into(), provider: "groq".into(), max_tokens: 32_768, supports_tools: true, supports_streaming: true },
+            ModelInfo { id: "mixtral-8x7b-32768".into(), name: "mixtral-8x7b-32768".into(), provider: "groq".into(), max_tokens: 32_768, supports_tools: true, supports_streaming: true },
         ])
     }
 

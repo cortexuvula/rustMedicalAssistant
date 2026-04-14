@@ -135,6 +135,26 @@ struct ApiUsage {
 // OpenAiCompatibleClient
 // ──────────────────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Models-listing serde types
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ModelsListResponse {
+    data: Vec<ApiModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiModelEntry {
+    id: String,
+    #[serde(default)]
+    owned_by: Option<String>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// OpenAiCompatibleClient
+// ──────────────────────────────────────────────────────────────────────────────
+
 /// A client for any endpoint implementing the OpenAI chat-completions protocol.
 pub struct OpenAiCompatibleClient {
     pub client: Client,
@@ -278,6 +298,32 @@ impl OpenAiCompatibleClient {
             usage,
             tool_calls,
         }
+    }
+
+    /// Fetch the list of model IDs from the `/models` endpoint.
+    pub async fn list_models(&self) -> AppResult<Vec<String>> {
+        let url = format!("{}/models", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        }
+
+        let resp: ModelsListResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        let mut ids: Vec<String> = resp.data.into_iter().map(|m| m.id).collect();
+        ids.sort();
+        Ok(ids)
     }
 
     pub async fn complete(&self, request: &CompletionRequest) -> AppResult<CompletionResponse> {

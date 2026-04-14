@@ -3,6 +3,9 @@
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
   import { listApiKeys, setApiKey } from '../api/settings';
+  import { listModels, setActiveProvider, type ModelInfo } from '../api/chat';
+  import { listAudioDevices } from '../api/audio';
+  import type { AudioDevice } from '../types';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -27,12 +30,44 @@
     saveStatus[p.id] = 'idle';
   }
 
+  let availableModels = $state<ModelInfo[]>([]);
+  let modelsLoading = $state(false);
+
+  let audioDevices = $state<AudioDevice[]>([]);
+  let devicesLoading = $state(false);
+
+  async function fetchAudioDevices() {
+    devicesLoading = true;
+    try {
+      audioDevices = await listAudioDevices();
+    } catch (e) {
+      console.error('Failed to list audio devices:', e);
+      audioDevices = [];
+    } finally {
+      devicesLoading = false;
+    }
+  }
+
+  async function fetchModelsForProvider(provider: string) {
+    modelsLoading = true;
+    try {
+      availableModels = await listModels(provider);
+    } catch (e) {
+      console.error('Failed to fetch models:', e);
+      availableModels = [];
+    } finally {
+      modelsLoading = false;
+    }
+  }
+
   onMount(async () => {
     try {
       storedKeys = await listApiKeys();
     } catch (err) {
       console.error('Failed to list API keys:', err);
     }
+    await fetchModelsForProvider($settings.ai_provider);
+    await fetchAudioDevices();
   });
 
   async function handleSaveApiKey(provider: string) {
@@ -76,11 +111,27 @@
   async function handleAiProviderChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
     await settings.updateField('ai_provider', value);
+    await setActiveProvider(value);
+    await fetchModelsForProvider(value);
+    // Auto-select first model for the new provider
+    if (availableModels.length > 0) {
+      await settings.updateField('ai_model', availableModels[0].id);
+    }
+  }
+
+  async function handleAiModelChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value;
+    await settings.updateField('ai_model', value);
   }
 
   async function handleTemperatureChange(e: Event) {
     const value = parseFloat((e.target as HTMLInputElement).value);
     await settings.updateField('temperature', value);
+  }
+
+  async function handleInputDeviceChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value;
+    await settings.updateField('input_device', value || null);
   }
 
   async function handleSttProviderChange(e: Event) {
@@ -224,6 +275,26 @@
           </div>
 
           <div class="form-group">
+            <label for="ai-model" class="form-label">Model</label>
+            <select
+              id="ai-model"
+              value={$settings.ai_model}
+              onchange={handleAiModelChange}
+              disabled={modelsLoading}
+            >
+              {#if modelsLoading}
+                <option value="">Loading models…</option>
+              {:else if availableModels.length === 0}
+                <option value="">No models available</option>
+              {:else}
+                {#each availableModels as model}
+                  <option value={model.id}>{model.name}</option>
+                {/each}
+              {/if}
+            </select>
+          </div>
+
+          <div class="form-group">
             <label for="temperature" class="form-label">
               Temperature
               <span class="value-display">{$settings.temperature.toFixed(1)}</span>
@@ -248,6 +319,27 @@
       {:else if activeSection === 'audio'}
         <section class="settings-section">
           <h3 class="section-title">Audio / STT</h3>
+
+          <div class="form-group">
+            <label for="input-device" class="form-label">Input Device</label>
+            <select
+              id="input-device"
+              value={$settings.input_device ?? ''}
+              onchange={handleInputDeviceChange}
+              disabled={devicesLoading}
+            >
+              {#if devicesLoading}
+                <option value="">Loading devices…</option>
+              {:else}
+                <option value="">System Default</option>
+                {#each audioDevices as device}
+                  <option value={device.name}>
+                    {device.name}{device.is_default ? ' (Default)' : ''}
+                  </option>
+                {/each}
+              {/if}
+            </select>
+          </div>
 
           <div class="form-group">
             <label for="stt-provider" class="form-label">STT Provider</label>

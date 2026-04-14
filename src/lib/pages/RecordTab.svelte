@@ -1,11 +1,18 @@
 <script lang="ts">
   import { audio } from '../stores/audio';
   import { transcribeRecording } from '../api/transcription';
+  import { importAudioFile } from '../api/recordings';
   import { recordings } from '../stores/recordings';
   import RecordingHeader from '../components/RecordingHeader.svelte';
+  import { open } from '@tauri-apps/plugin-dialog';
 
   let transcribing = $state(false);
   let transcriptionError = $state<string | null>(null);
+
+  // Import flow state
+  let importedRecordingId = $state<string | null>(null);
+  let importedFilename = $state<string | null>(null);
+  let importing = $state(false);
 
   async function handleTranscribe() {
     const recordingId = $audio.lastRecordingId;
@@ -21,17 +28,107 @@
       transcribing = false;
     }
   }
+
+  async function handleUploadAudio() {
+    transcriptionError = null;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: 'Audio Files', extensions: ['wav', 'mp3', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'webm'] },
+        ],
+      });
+      if (!selected) return;
+
+      importing = true;
+      const filePath = typeof selected === 'string' ? selected : selected;
+      const recordingId = await importAudioFile(filePath);
+      importedRecordingId = recordingId;
+      importedFilename = filePath.split('/').pop()?.split('\\').pop() ?? 'audio file';
+      await recordings.load();
+    } catch (e: any) {
+      transcriptionError = e?.toString() || 'Import failed';
+    } finally {
+      importing = false;
+    }
+  }
+
+  async function handleTranscribeImported() {
+    if (!importedRecordingId) return;
+    transcribing = true;
+    transcriptionError = null;
+    try {
+      await transcribeRecording(importedRecordingId);
+      await recordings.load();
+    } catch (e: any) {
+      transcriptionError = e?.toString() || 'Transcription failed';
+    } finally {
+      transcribing = false;
+    }
+  }
+
+  function handleNewImport() {
+    importedRecordingId = null;
+    importedFilename = null;
+    transcriptionError = null;
+  }
 </script>
 
 <div class="record-tab">
   <RecordingHeader />
 
   <div class="record-content">
-    {#if $audio.state === 'idle'}
+    {#if importedRecordingId && $audio.state === 'idle'}
+      <div class="state-message">
+        <div class="state-icon">✓</div>
+        <h2>Audio File Imported</h2>
+        <p><strong>{importedFilename}</strong> has been added to your recordings.</p>
+
+        <div class="post-actions">
+          <button
+            class="btn-transcribe"
+            onclick={handleTranscribeImported}
+            disabled={transcribing}
+          >
+            {#if transcribing}
+              <span class="spinner"></span> Transcribing...
+            {:else}
+              Transcribe Recording
+            {/if}
+          </button>
+          <button class="btn-secondary" onclick={handleNewImport}>
+            Import Another
+          </button>
+        </div>
+
+        {#if transcriptionError}
+          <div class="error-text">{transcriptionError}</div>
+        {/if}
+      </div>
+
+    {:else if $audio.state === 'idle'}
       <div class="state-message">
         <div class="state-icon">🎙</div>
         <h2>Ready to Record</h2>
-        <p>Press <strong>Record</strong> to start capturing audio.</p>
+        <p>Press <strong>Record</strong> to start capturing audio, or upload an existing file.</p>
+
+        <div class="post-actions">
+          <button
+            class="btn-upload"
+            onclick={handleUploadAudio}
+            disabled={importing}
+          >
+            {#if importing}
+              <span class="spinner"></span> Importing...
+            {:else}
+              Upload Audio File
+            {/if}
+          </button>
+        </div>
+
+        {#if transcriptionError}
+          <div class="error-text">{transcriptionError}</div>
+        {/if}
       </div>
 
     {:else if $audio.state === 'recording'}
@@ -137,6 +234,10 @@
   .post-actions {
     margin-top: 16px;
     margin-bottom: 8px;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
   }
 
   .btn-transcribe {
@@ -187,5 +288,46 @@
   .hint {
     margin-top: 12px;
     font-size: 13px;
+  }
+
+  .btn-upload {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 24px;
+    background-color: var(--bg-tertiary, #374151);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-upload:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+  }
+
+  .btn-upload:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 24px;
+    background-color: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-secondary:hover {
+    background-color: var(--bg-hover);
   }
 </style>

@@ -33,15 +33,24 @@ struct GenerationProgress {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Load a recording from DB and acquire the active AI provider in one step.
+/// Load a recording from DB and acquire the AI provider from saved settings.
 async fn get_provider_and_recording(
     state: &AppState,
     recording_id: &str,
 ) -> Result<(Arc<dyn AiProvider>, Recording), String> {
+    // Read the provider name from settings so we always match the stored model.
+    let provider_name = {
+        let conn = state.db.conn().map_err(|e| e.to_string())?;
+        medical_db::settings::SettingsRepo::load_config(&conn)
+            .map(|cfg| cfg.ai_provider)
+            .unwrap_or_else(|_| "openai".to_string())
+    };
+
     let provider = {
         let registry = state.ai_providers.lock().await;
         registry
-            .get_active_arc()
+            .get_arc(&provider_name)
+            .or_else(|| registry.get_active_arc())
             .ok_or("No AI provider configured. Add an API key in Settings.")?
     };
 

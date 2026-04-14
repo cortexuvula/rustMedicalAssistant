@@ -11,11 +11,13 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app_state)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::recordings::list_recordings,
             commands::recordings::get_recording,
             commands::recordings::search_recordings,
             commands::recordings::delete_recording,
+            commands::recordings::import_audio_file,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::get_api_key,

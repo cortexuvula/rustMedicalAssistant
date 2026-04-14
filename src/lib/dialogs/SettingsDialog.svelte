@@ -4,7 +4,9 @@
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
   import { listApiKeys, setApiKey } from '../api/settings';
-  import { listModels, type ModelInfo } from '../api/chat';
+  import { listModels, setActiveProvider, type ModelInfo } from '../api/chat';
+  import { listAudioDevices } from '../api/audio';
+  import type { AudioDevice } from '../types';
 
   interface Props {
     open: boolean;
@@ -45,6 +47,7 @@
     }
     // Fetch available models for the current provider
     await fetchModelsForProvider($settings.ai_provider);
+    await fetchAudioDevices();
   });
 
   async function handleSaveApiKey(provider: string) {
@@ -92,6 +95,21 @@
   let availableModels = $state<ModelInfo[]>([]);
   let modelsLoading = $state(false);
 
+  let audioDevices = $state<AudioDevice[]>([]);
+  let devicesLoading = $state(false);
+
+  async function fetchAudioDevices() {
+    devicesLoading = true;
+    try {
+      audioDevices = await listAudioDevices();
+    } catch (e) {
+      console.error('Failed to list audio devices:', e);
+      audioDevices = [];
+    } finally {
+      devicesLoading = false;
+    }
+  }
+
   async function fetchModelsForProvider(provider: string) {
     modelsLoading = true;
     try {
@@ -107,6 +125,7 @@
   async function handleAiProviderChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
     await settings.updateField('ai_provider', value);
+    await setActiveProvider(value);
     await fetchModelsForProvider(value);
     // Auto-select first model for the new provider
     if (availableModels.length > 0) {
@@ -122,6 +141,11 @@
   async function handleTemperatureChange(e: Event) {
     const value = parseFloat((e.target as HTMLInputElement).value);
     await settings.updateField('temperature', value);
+  }
+
+  async function handleInputDeviceChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value;
+    await settings.updateField('input_device', value || null);
   }
 
   async function handleSttProviderChange(e: Event) {
@@ -305,6 +329,27 @@
       {:else if activeSection === 'audio'}
         <section class="settings-section">
           <h3 class="section-title">Audio / STT</h3>
+
+          <div class="form-group">
+            <label for="input-device" class="form-label">Input Device</label>
+            <select
+              id="input-device"
+              value={$settings.input_device ?? ''}
+              onchange={handleInputDeviceChange}
+              disabled={devicesLoading}
+            >
+              {#if devicesLoading}
+                <option value="">Loading devices…</option>
+              {:else}
+                <option value="">System Default</option>
+                {#each audioDevices as device}
+                  <option value={device.name}>
+                    {device.name}{device.is_default ? ' (Default)' : ''}
+                  </option>
+                {/each}
+              {/if}
+            </select>
+          </div>
 
           <div class="form-group">
             <label for="stt-provider" class="form-label">STT Provider</label>

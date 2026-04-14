@@ -10,7 +10,7 @@ use tracing::instrument;
 
 use medical_core::error::{AppError, AppResult};
 use medical_core::traits::SttProvider;
-use medical_core::types::{AudioData, AudioStream, SttConfig, Transcript, TranscriptChunk};
+use medical_core::types::{AudioData, AudioStream, SttConfig, Transcript, TranscriptChunk, TranscriptSegment};
 
 use crate::deepgram::encode_audio_to_wav;
 
@@ -19,6 +19,17 @@ use crate::deepgram::encode_audio_to_wav;
 #[derive(Debug, Deserialize)]
 struct ElevenLabsResponse {
     text: Option<String>,
+    words: Option<Vec<ElevenLabsWord>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElevenLabsWord {
+    text: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    #[serde(rename = "type")]
+    word_type: Option<String>,
+    speaker_id: Option<String>,
 }
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -116,9 +127,29 @@ impl SttProvider for ElevenLabsSttProvider {
 
         let text = el.text.unwrap_or_default();
 
+        // Parse word-level segments with speaker IDs.
+        let segments: Vec<TranscriptSegment> = el
+            .words
+            .map(|words| {
+                words
+                    .into_iter()
+                    .filter(|w| w.word_type.as_deref() != Some("spacing"))
+                    .filter_map(|w| {
+                        Some(TranscriptSegment {
+                            text: w.text?,
+                            start: w.start?,
+                            end: w.end?,
+                            speaker: w.speaker_id,
+                            confidence: None,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(Transcript {
             text,
-            segments: vec![],
+            segments,
             language: config.language.clone(),
             duration_seconds: Some(duration),
             provider: self.name().to_owned(),

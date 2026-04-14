@@ -126,6 +126,69 @@ impl GeminiProvider {
         }
     }
 
+    async fn fetch_models_from_api(&self) -> AppResult<Vec<ModelInfo>> {
+        let url = format!("{}/models?key={}", self.base_url, self.api_key);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        }
+
+        #[derive(Deserialize)]
+        struct GeminiModelEntry {
+            name: String,
+            #[serde(rename = "displayName")]
+            display_name: Option<String>,
+            #[serde(rename = "supportedGenerationMethods", default)]
+            supported_generation_methods: Vec<String>,
+            #[serde(rename = "inputTokenLimit", default)]
+            input_token_limit: u32,
+        }
+
+        #[derive(Deserialize)]
+        struct GeminiModelsResponse {
+            models: Vec<GeminiModelEntry>,
+        }
+
+        let resp: GeminiModelsResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        let mut models: Vec<ModelInfo> = resp
+            .models
+            .into_iter()
+            .filter(|m| m.supported_generation_methods.iter().any(|method| method == "generateContent"))
+            .filter(|m| {
+                // Only include gemini models, not older PaLM/embedding models
+                let id = m.name.strip_prefix("models/").unwrap_or(&m.name);
+                id.starts_with("gemini")
+            })
+            .map(|m| {
+                let id = m.name.strip_prefix("models/").unwrap_or(&m.name).to_string();
+                let name = m.display_name.unwrap_or_else(|| id.clone());
+                ModelInfo {
+                    id,
+                    name,
+                    provider: "gemini".into(),
+                    max_tokens: m.input_token_limit,
+                    supports_tools: true,
+                    supports_streaming: true,
+                }
+            })
+            .collect();
+
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(models)
+    }
+
     fn build_request(&self, request: &CompletionRequest) -> GeminiRequest {
         let system_instruction = request.system_prompt.as_ref().map(|s| {
             GeminiSystemInstruction {
@@ -206,31 +269,18 @@ impl AiProvider for GeminiProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        // Try to fetch models from Gemini API
+        if let Ok(models) = self.fetch_models_from_api().await {
+            if !models.is_empty() {
+                return Ok(models);
+            }
+        }
+
+        // Fallback
         Ok(vec![
-            ModelInfo {
-                id: "gemini-2.0-flash".into(),
-                name: "Gemini 2.0 Flash".into(),
-                provider: "gemini".into(),
-                max_tokens: 1_048_576,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "gemini-1.5-pro".into(),
-                name: "Gemini 1.5 Pro".into(),
-                provider: "gemini".into(),
-                max_tokens: 2_097_152,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "gemini-1.5-flash".into(),
-                name: "Gemini 1.5 Flash".into(),
-                provider: "gemini".into(),
-                max_tokens: 1_048_576,
-                supports_tools: true,
-                supports_streaming: true,
-            },
+            ModelInfo { id: "gemini-2.0-flash".into(), name: "Gemini 2.0 Flash".into(), provider: "gemini".into(), max_tokens: 1_048_576, supports_tools: true, supports_streaming: true },
+            ModelInfo { id: "gemini-1.5-pro".into(), name: "Gemini 1.5 Pro".into(), provider: "gemini".into(), max_tokens: 2_097_152, supports_tools: true, supports_streaming: true },
+            ModelInfo { id: "gemini-1.5-flash".into(), name: "Gemini 1.5 Flash".into(), provider: "gemini".into(), max_tokens: 1_048_576, supports_tools: true, supports_streaming: true },
         ])
     }
 

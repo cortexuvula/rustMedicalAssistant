@@ -43,9 +43,29 @@ impl AiProvider for OllamaProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        // Ollama supports the OpenAI-compatible /v1/models endpoint
+        if let Ok(ids) = self.client.list_models().await {
+            let mut models: Vec<ModelInfo> = ids
+                .into_iter()
+                .map(|id| ModelInfo {
+                    name: id.clone(),
+                    id,
+                    provider: "ollama".into(),
+                    max_tokens: 8_192,
+                    supports_tools: false,
+                    supports_streaming: true,
+                })
+                .collect();
+            if !models.is_empty() {
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                return Ok(models);
+            }
+        }
+
+        // Fallback
         Ok(vec![ModelInfo {
             id: "llama3".into(),
-            name: "LLaMA 3".into(),
+            name: "llama3".into(),
             provider: "ollama".into(),
             max_tokens: 8_192,
             supports_tools: false,

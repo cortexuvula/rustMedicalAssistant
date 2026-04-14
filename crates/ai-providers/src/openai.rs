@@ -32,31 +32,32 @@ impl AiProvider for OpenAiProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        // Chat-capable model prefixes
+        const CHAT_PREFIXES: &[&str] = &["gpt-4", "gpt-3.5", "o1", "o3", "o4", "chatgpt"];
+
+        if let Ok(ids) = self.client.list_models().await {
+            let mut models: Vec<ModelInfo> = ids
+                .into_iter()
+                .filter(|id| CHAT_PREFIXES.iter().any(|p| id.starts_with(p)))
+                .map(|id| ModelInfo {
+                    name: id.clone(),
+                    id,
+                    provider: "openai".into(),
+                    max_tokens: 128_000,
+                    supports_tools: true,
+                    supports_streaming: true,
+                })
+                .collect();
+            if !models.is_empty() {
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                return Ok(models);
+            }
+        }
+
+        // Fallback if API call fails
         Ok(vec![
-            ModelInfo {
-                id: "gpt-4o".into(),
-                name: "GPT-4o".into(),
-                provider: "openai".into(),
-                max_tokens: 128_000,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "gpt-4o-mini".into(),
-                name: "GPT-4o Mini".into(),
-                provider: "openai".into(),
-                max_tokens: 128_000,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "gpt-4-turbo".into(),
-                name: "GPT-4 Turbo".into(),
-                provider: "openai".into(),
-                max_tokens: 128_000,
-                supports_tools: true,
-                supports_streaming: true,
-            },
+            ModelInfo { id: "gpt-4o".into(), name: "gpt-4o".into(), provider: "openai".into(), max_tokens: 128_000, supports_tools: true, supports_streaming: true },
+            ModelInfo { id: "gpt-4o-mini".into(), name: "gpt-4o-mini".into(), provider: "openai".into(), max_tokens: 128_000, supports_tools: true, supports_streaming: true },
         ])
     }
 

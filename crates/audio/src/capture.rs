@@ -88,6 +88,65 @@ impl Drop for CaptureHandle {
 // Public API
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Negotiate a supported `StreamConfig` from the device.
+///
+/// Tries the requested sample rate first, then falls back to common rates
+/// (48 kHz, 44.1 kHz, 16 kHz) and finally the device's default config.
+fn negotiate_stream_config(
+    device: &cpal::Device,
+    desired: &CaptureConfig,
+) -> AudioResult<cpal::StreamConfig> {
+    let supported: Vec<cpal::SupportedStreamConfigRange> = device
+        .supported_input_configs()
+        .map_err(|e| AudioError::Capture(format!("Cannot query device configs: {e}")))?
+        .collect();
+
+    if supported.is_empty() {
+        // Last resort: ask cpal for its own default.
+        return device
+            .default_input_config()
+            .map(|c| c.into())
+            .map_err(|e| AudioError::Capture(format!("No supported configs: {e}")));
+    }
+
+    // Rates to try, in priority order: requested rate first, then common rates.
+    let candidate_rates: &[u32] = &[
+        desired.sample_rate,
+        48_000,
+        44_100,
+        16_000,
+        22_050,
+        96_000,
+    ];
+
+    for &rate in candidate_rates {
+        for range in &supported {
+            if range.min_sample_rate().0 <= rate && rate <= range.max_sample_rate().0 {
+                let channels = if desired.channels <= range.channels() {
+                    desired.channels
+                } else {
+                    range.channels()
+                };
+                return Ok(cpal::StreamConfig {
+                    channels,
+                    sample_rate: cpal::SampleRate(rate),
+                    buffer_size: cpal::BufferSize::Default,
+                });
+            }
+        }
+    }
+
+    // If none of the candidate rates match, pick the max rate from the first range.
+    let first = &supported[0];
+    let rate = first.max_sample_rate().0;
+    let channels = first.channels().min(desired.channels).max(1);
+    Ok(cpal::StreamConfig {
+        channels,
+        sample_rate: cpal::SampleRate(rate),
+        buffer_size: cpal::BufferSize::Default,
+    })
+}
+
 /// Start an audio capture session.
 ///
 /// Returns a `(CaptureHandle, Receiver<Vec<f32>>)`.  The receiver delivers
@@ -101,14 +160,19 @@ pub fn start_capture(
     output_path: &Path,
 ) -> AudioResult<(CaptureHandle, mpsc::Receiver<Vec<f32>>)> {
     // ── Build cpal StreamConfig ───────────────────────────────────────────────
-    let stream_config = cpal::StreamConfig {
-        channels: config.channels,
-        sample_rate: cpal::SampleRate(config.sample_rate),
-        buffer_size: cpal::BufferSize::Default,
-    };
+    let stream_config = negotiate_stream_config(device, &config)?;
+
+    // Use the negotiated values (may differ from the requested config).
+    let actual_rate = stream_config.sample_rate.0;
+    let actual_channels = stream_config.channels;
+
+    tracing::info!(
+        "Audio capture: requested {}Hz {}ch, using {}Hz {}ch",
+        config.sample_rate, config.channels, actual_rate, actual_channels
+    );
 
     // ── Ring buffer (2 seconds of audio) ─────────────────────────────────────
-    let ring_capacity = (config.sample_rate as usize) * (config.channels as usize) * 2;
+    let ring_capacity = (actual_rate as usize) * (actual_channels as usize) * 2;
     let rb = HeapRb::<f32>::new(ring_capacity.max(config.buffer_size * 4));
     let (mut prod, mut cons) = rb.split();
 
@@ -142,8 +206,8 @@ pub fn start_capture(
 
     // ── WAV writer setup ──────────────────────────────────────────────────────
     let wav_spec = hound::WavSpec {
-        channels: config.channels,
-        sample_rate: config.sample_rate,
+        channels: actual_channels,
+        sample_rate: actual_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
@@ -156,7 +220,7 @@ pub fn start_capture(
 
     // Chunk size to accumulate before computing & sending a waveform snapshot.
     // ~50 ms worth of samples.
-    let waveform_chunk = (config.sample_rate / 20) as usize;
+    let waveform_chunk = (actual_rate / 20) as usize;
 
     // ── Drain thread ──────────────────────────────────────────────────────────
     let drain_handle = thread::spawn(move || {

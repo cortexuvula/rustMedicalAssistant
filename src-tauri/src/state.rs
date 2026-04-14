@@ -201,8 +201,20 @@ impl AppState {
         let keys = KeyStorage::open(&config_dir)?;
 
         // Initialize provider registries from saved API keys
-        let ai_providers = init_ai_providers(&keys);
+        let mut ai_providers = init_ai_providers(&keys);
         let stt_providers = init_stt_providers(&keys);
+
+        // Set the active AI provider from saved settings
+        {
+            let conn = db.conn().ok();
+            if let Some(c) = conn {
+                if let Ok(cfg) = medical_db::settings::SettingsRepo::load_config(&c) {
+                    if ai_providers.set_active(&cfg.ai_provider) {
+                        info!("Active AI provider set to '{}' from settings", cfg.ai_provider);
+                    }
+                }
+            }
+        }
 
         // --- RAG subsystem ---
         // Create the embedding generator: prefer OpenAI if key exists, else Ollama

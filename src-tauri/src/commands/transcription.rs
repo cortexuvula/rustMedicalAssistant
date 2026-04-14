@@ -88,9 +88,10 @@ pub async fn transcribe_recording(
     let audio = load_wav_to_audio_data(&wav_path)?;
 
     // Build STT config from caller parameters.
+    // Default diarize to true — medical recordings are typically conversations.
     let config = SttConfig {
         language,
-        diarize: diarize.unwrap_or(false),
+        diarize: diarize.unwrap_or(true),
         ..SttConfig::default()
     };
 
@@ -109,8 +110,11 @@ pub async fn transcribe_recording(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Build speaker-attributed text when diarization segments are available.
+    let display_text = format_transcript_with_speakers(&transcript);
+
     // Persist the transcript and mark as Completed.
-    recording.transcript = Some(transcript.text.clone());
+    recording.transcript = Some(display_text.clone());
     recording.stt_provider = Some(transcript.provider.clone());
     recording.status = ProcessingStatus::Completed {
         completed_at: Utc::now(),
@@ -120,7 +124,82 @@ pub async fn transcribe_recording(
     // --- emit: complete ---
     let _ = app.emit("transcription-progress", "complete");
 
-    Ok(transcript.text)
+    Ok(display_text)
+}
+
+/// Format a transcript with speaker labels when diarization data is available.
+///
+/// Groups consecutive segments by speaker and formats as:
+///   Speaker 1: Hello, how are you?
+///   Speaker 2: I'm not feeling well.
+///
+/// Falls back to the raw text when no speaker segments are present.
+fn format_transcript_with_speakers(transcript: &medical_core::types::stt::Transcript) -> String {
+    let segments_with_speakers: Vec<_> = transcript
+        .segments
+        .iter()
+        .filter(|s| s.speaker.is_some())
+        .collect();
+
+    if segments_with_speakers.is_empty() {
+        return transcript.text.clone();
+    }
+
+    // Map raw speaker IDs (speaker_0, speaker_1) to friendly labels (Speaker 1, Speaker 2).
+    let mut speaker_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut speaker_counter = 0u32;
+
+    for seg in &segments_with_speakers {
+        if let Some(ref id) = seg.speaker {
+            if !speaker_map.contains_key(id) {
+                speaker_counter += 1;
+                speaker_map.insert(id.clone(), format!("Speaker {speaker_counter}"));
+            }
+        }
+    }
+
+    // Group consecutive words by speaker into paragraphs.
+    let mut result = String::new();
+    let mut current_speaker: Option<&str> = None;
+    let mut current_words: Vec<&str> = Vec::new();
+
+    for seg in &segments_with_speakers {
+        let speaker_id = seg.speaker.as_deref().unwrap_or("unknown");
+
+        if current_speaker != Some(speaker_id) {
+            // Flush the previous speaker's words.
+            if !current_words.is_empty() {
+                if let Some(prev_id) = current_speaker {
+                    let label = speaker_map.get(prev_id).map(|s| s.as_str()).unwrap_or(prev_id);
+                    if !result.is_empty() {
+                        result.push_str("\n\n");
+                    }
+                    result.push_str(label);
+                    result.push_str(": ");
+                    result.push_str(&current_words.join(" "));
+                }
+                current_words.clear();
+            }
+            current_speaker = Some(speaker_id);
+        }
+
+        current_words.push(seg.text.trim());
+    }
+
+    // Flush the last speaker's words.
+    if !current_words.is_empty() {
+        if let Some(prev_id) = current_speaker {
+            let label = speaker_map.get(prev_id).map(|s| s.as_str()).unwrap_or(prev_id);
+            if !result.is_empty() {
+                result.push_str("\n\n");
+            }
+            result.push_str(label);
+            result.push_str(": ");
+            result.push_str(&current_words.join(" "));
+        }
+    }
+
+    result
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

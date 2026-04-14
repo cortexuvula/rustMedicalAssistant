@@ -32,23 +32,28 @@ impl AiProvider for CerebrasProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        if let Ok(ids) = self.client.list_models().await {
+            let mut models: Vec<ModelInfo> = ids
+                .into_iter()
+                .map(|id| ModelInfo {
+                    name: id.clone(),
+                    id,
+                    provider: "cerebras".into(),
+                    max_tokens: 8_192,
+                    supports_tools: false,
+                    supports_streaming: true,
+                })
+                .collect();
+            if !models.is_empty() {
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                return Ok(models);
+            }
+        }
+
+        // Fallback
         Ok(vec![
-            ModelInfo {
-                id: "llama-3.3-70b".into(),
-                name: "LLaMA 3.3 70B".into(),
-                provider: "cerebras".into(),
-                max_tokens: 8_192,
-                supports_tools: false,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "qwen-3-32b".into(),
-                name: "Qwen 3 32B".into(),
-                provider: "cerebras".into(),
-                max_tokens: 8_192,
-                supports_tools: false,
-                supports_streaming: true,
-            },
+            ModelInfo { id: "llama-3.3-70b".into(), name: "llama-3.3-70b".into(), provider: "cerebras".into(), max_tokens: 8_192, supports_tools: false, supports_streaming: true },
+            ModelInfo { id: "qwen-3-32b".into(), name: "qwen-3-32b".into(), provider: "cerebras".into(), max_tokens: 8_192, supports_tools: false, supports_streaming: true },
         ])
     }
 

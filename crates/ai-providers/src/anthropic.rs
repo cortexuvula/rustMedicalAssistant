@@ -141,6 +141,58 @@ impl AnthropicProvider {
         }
     }
 
+    async fn fetch_models_from_api(&self) -> AppResult<Vec<ModelInfo>> {
+        let url = format!("{}/models?limit=100", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        }
+
+        #[derive(Deserialize)]
+        struct AnthropicModelEntry {
+            id: String,
+            display_name: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct AnthropicModelsResponse {
+            data: Vec<AnthropicModelEntry>,
+        }
+
+        let resp: AnthropicModelsResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+
+        let mut models: Vec<ModelInfo> = resp
+            .data
+            .into_iter()
+            .filter(|m| m.id.starts_with("claude"))
+            .map(|m| {
+                let name = m.display_name.unwrap_or_else(|| m.id.clone());
+                ModelInfo {
+                    id: m.id,
+                    name,
+                    provider: "anthropic".into(),
+                    max_tokens: 200_000,
+                    supports_tools: true,
+                    supports_streaming: true,
+                }
+            })
+            .collect();
+
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(models)
+    }
+
     fn build_request(&self, request: &CompletionRequest, stream: bool) -> AnthropicRequest {
         let system = request.system_prompt.clone();
 
@@ -235,31 +287,19 @@ impl AiProvider for AnthropicProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        // Try fetching from Anthropic's models endpoint
+        if let Ok(models) = self.fetch_models_from_api().await {
+            if !models.is_empty() {
+                return Ok(models);
+            }
+        }
+
+        // Fallback: Anthropic doesn't have a stable public model-listing API,
+        // so keep a curated list as fallback.
         Ok(vec![
-            ModelInfo {
-                id: "claude-opus-4-20250514".into(),
-                name: "Claude Opus 4".into(),
-                provider: "anthropic".into(),
-                max_tokens: 200_000,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "claude-sonnet-4-20250514".into(),
-                name: "Claude Sonnet 4".into(),
-                provider: "anthropic".into(),
-                max_tokens: 200_000,
-                supports_tools: true,
-                supports_streaming: true,
-            },
-            ModelInfo {
-                id: "claude-haiku-4-20250514".into(),
-                name: "Claude Haiku 4".into(),
-                provider: "anthropic".into(),
-                max_tokens: 200_000,
-                supports_tools: true,
-                supports_streaming: true,
-            },
+            ModelInfo { id: "claude-opus-4-20250514".into(), name: "Claude Opus 4".into(), provider: "anthropic".into(), max_tokens: 200_000, supports_tools: true, supports_streaming: true },
+            ModelInfo { id: "claude-sonnet-4-20250514".into(), name: "Claude Sonnet 4".into(), provider: "anthropic".into(), max_tokens: 200_000, supports_tools: true, supports_streaming: true },
+            ModelInfo { id: "claude-haiku-4-20250514".into(), name: "Claude Haiku 4".into(), provider: "anthropic".into(), max_tokens: 200_000, supports_tools: true, supports_streaming: true },
         ])
     }
 

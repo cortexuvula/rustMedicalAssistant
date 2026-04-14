@@ -46,6 +46,17 @@ pub async fn start_recording(
     let friendly_name = now.format("Recording_%Y-%m-%d_%H-%M-%S").to_string();
     let wav_path = recordings_dir.join(format!("{}.wav", friendly_name));
 
+    // Read the configured input device and sample rate from settings.
+    let (input_device_name, sample_rate) = {
+        let conn = state.db.conn().map_err(|e| e.to_string())?;
+        let config = medical_db::settings::SettingsRepo::load_config(&conn)
+            .map_err(|e| e.to_string())?;
+        (
+            config.input_device.filter(|s| !s.is_empty()),
+            config.sample_rate,
+        )
+    };
+
     // Start capture on a dedicated std::thread so the !Send CaptureHandle
     // never crosses a thread boundary via tokio::spawn_blocking.  We wrap
     // it in SendCaptureHandle (which has an unsafe Send impl) and send it
@@ -57,8 +68,12 @@ pub async fn start_recording(
 
     std::thread::spawn(move || {
         let result = (|| {
-            let device = get_input_device(None).map_err(|e| e.to_string())?;
-            let config = CaptureConfig::default();
+            let device = get_input_device(input_device_name.as_deref())
+                .map_err(|e| e.to_string())?;
+            let config = CaptureConfig {
+                sample_rate,
+                ..CaptureConfig::default()
+            };
             let (handle, waveform_rx) =
                 medical_audio::capture::start_capture(&device, config, &wav_path_clone)
                     .map_err(|e| e.to_string())?;

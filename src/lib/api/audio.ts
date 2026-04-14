@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { AudioDevice } from '../types';
 
-export async function listAudioDevices(): Promise<string[]> {
+export async function listAudioDevices(): Promise<AudioDevice[]> {
   return invoke('list_audio_devices');
 }
 

@@ -1,3 +1,4 @@
+pub mod convert;
 pub mod device;
 pub mod state;
 pub mod capture;

@@ -16,3 +16,7 @@ export async function searchRecordings(query: string, limit = 20): Promise<Recor
 export async function deleteRecording(id: string): Promise<void> {
   return invoke('delete_recording', { id });
 }
+
+export async function importAudioFile(filePath: string): Promise<string> {
+  return invoke('import_audio_file', { filePath });
+}
