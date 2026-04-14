@@ -9,6 +9,7 @@ use medical_core::types::recording::{ProcessingStatus, Recording};
 use medical_db::recordings::RecordingsRepo;
 
 use crate::state::{AppState, CurrentRecording, SendCaptureHandle};
+use super::resolve_recordings_dir;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 1. list_audio_devices
@@ -36,9 +37,8 @@ pub async fn start_recording(
         }
     }
 
-    // Create recordings directory.
-    let recordings_dir = state.data_dir.join("recordings");
-    std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+    // Resolve recordings directory from settings (custom path or default).
+    let recordings_dir = resolve_recordings_dir(&state.db, &state.data_dir)?;
 
     // Generate UUID and human-readable filename.
     let recording_id = Uuid::new_v4();

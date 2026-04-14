@@ -7,6 +7,7 @@ use medical_db::vectors::VectorsRepo;
 use uuid::Uuid;
 
 use crate::state::AppState;
+use super::resolve_recordings_dir;
 
 #[tauri::command]
 pub fn list_recordings(
@@ -82,9 +83,8 @@ pub fn import_audio_file(
         return Err(format!("File not found: {file_path}"));
     }
 
-    // Create recordings directory.
-    let recordings_dir = state.data_dir.join("recordings");
-    std::fs::create_dir_all(&recordings_dir).map_err(|e| e.to_string())?;
+    // Resolve recordings directory from settings (custom path or default).
+    let recordings_dir = resolve_recordings_dir(&state.db, &state.data_dir)?;
 
     let original_name = source
         .file_stem()

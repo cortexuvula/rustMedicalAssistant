@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::Utc;
 use tauri::Emitter;
 use uuid::Uuid;
@@ -58,34 +60,50 @@ pub async fn transcribe_recording(
     // --- emit: loading ---
     let _ = app.emit("transcription-progress", "loading");
 
-    // Parse and validate the recording ID.
+    // Parse the recording ID.
     let uuid = Uuid::parse_str(&recording_id).map_err(|e| e.to_string())?;
 
-    // Load the recording from the database to ensure it exists.
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
-    let mut recording =
-        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?;
+    // Load the recording and mark as Processing — on a blocking thread.
+    let db = Arc::clone(&state.db);
+    let recording = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().map_err(|e| e.to_string())?;
+        let mut recording =
+            RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?;
 
-    // Mark the recording as Processing.
-    recording.status = ProcessingStatus::Processing {
-        started_at: Utc::now(),
-    };
-    RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
+        recording.status = ProcessingStatus::Processing {
+            started_at: Utc::now(),
+        };
+        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
+        Ok::<_, String>(recording)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
-    // Use the audio_path stored in the recording (supports any filename format).
     let wav_path = recording.audio_path.clone();
 
     if !wav_path.exists() {
         let err_msg = format!("WAV file not found: {}", wav_path.display());
-        recording.status = ProcessingStatus::Failed {
+        // Mark failed on a blocking thread
+        let db = Arc::clone(&state.db);
+        let mut rec = recording;
+        rec.status = ProcessingStatus::Failed {
             error: err_msg.clone(),
             retry_count: 0,
         };
-        let _ = RecordingsRepo::update(&conn, &recording);
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = db.conn() {
+                let _ = RecordingsRepo::update(&conn, &rec);
+            }
+        })
+        .await;
         return Err(err_msg);
     }
 
-    let audio = load_wav_to_audio_data(&wav_path)?;
+    // Load and decode the WAV file on a blocking thread (CPU-intensive for large files).
+    let wav_path_clone = wav_path.clone();
+    let audio = tokio::task::spawn_blocking(move || load_wav_to_audio_data(&wav_path_clone))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
 
     // Build STT config from caller parameters.
     // Default diarize to true — medical recordings are typically conversations.
@@ -113,13 +131,20 @@ pub async fn transcribe_recording(
     // Build speaker-attributed text when diarization segments are available.
     let display_text = format_transcript_with_speakers(&transcript);
 
-    // Persist the transcript and mark as Completed.
+    // Persist the transcript and mark as Completed — on a blocking thread.
+    let db = Arc::clone(&state.db);
+    let mut recording = recording;
     recording.transcript = Some(display_text.clone());
     recording.stt_provider = Some(transcript.provider.clone());
     recording.status = ProcessingStatus::Completed {
         completed_at: Utc::now(),
     };
-    RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn().map_err(|e| e.to_string())?;
+        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
     // --- emit: complete ---
     let _ = app.emit("transcription-progress", "complete");

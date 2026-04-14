@@ -1,8 +1,10 @@
 <script lang="ts">
   import './app.css';
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { settings } from './lib/stores/settings';
   import { theme } from './lib/stores/theme';
+  import { generation } from './lib/stores/generation';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
@@ -30,13 +32,27 @@
     }
   });
 
+  let progressUnlisten: UnlistenFn | null = null;
+
   onMount(async () => {
+    // Listen for generation progress events globally so state persists across tab switches
+    progressUnlisten = await listen<{ type: string; status: string }>(
+      'generation-progress',
+      (event) => {
+        generation.setProgress(`${event.payload.type}: ${event.payload.status}`);
+      }
+    );
+
     await settings.load();
     // Set theme from loaded settings
     const unsubscribe = settings.subscribe((cfg) => {
       theme.set(cfg.theme);
     });
     return unsubscribe;
+  });
+
+  onDestroy(() => {
+    progressUnlisten?.();
   });
 </script>
 

@@ -2,9 +2,16 @@ import { invoke } from '@tauri-apps/api/core';
 
 export async function generateSoap(
   recordingId: string,
-  template?: string
+  template?: string,
+  context?: string
 ): Promise<string> {
-  return invoke('generate_soap', { recordingId, template });
+  // Tauri omits undefined fields from the payload, so explicitly pass null
+  // for optional parameters to ensure they map to Rust Option::None
+  return invoke('generate_soap', {
+    recordingId,
+    template: template ?? null,
+    context: context ?? null,
+  });
 }
 
 export async function generateReferral(
@@ -12,14 +19,21 @@ export async function generateReferral(
   recipientType?: string,
   urgency?: string
 ): Promise<string> {
-  return invoke('generate_referral', { recordingId, recipientType, urgency });
+  return invoke('generate_referral', {
+    recordingId,
+    recipientType: recipientType ?? null,
+    urgency: urgency ?? null,
+  });
 }
 
 export async function generateLetter(
   recordingId: string,
   letterType?: string
 ): Promise<string> {
-  return invoke('generate_letter', { recordingId, letterType });
+  return invoke('generate_letter', {
+    recordingId,
+    letterType: letterType ?? null,
+  });
 }
 
 export async function generateSynopsis(

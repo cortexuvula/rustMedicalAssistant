@@ -20,6 +20,29 @@
       ? ($selectedRecording[config.field] as string | null) ?? ''
       : null
   );
+
+  let copyStatus = $state<'idle' | 'copied'>('idle');
+
+  async function handleCopy() {
+    if (!content) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      copyStatus = 'copied';
+      setTimeout(() => { copyStatus = 'idle'; }, 2000);
+    } catch {
+      // Fallback for environments where clipboard API is restricted
+      const textarea = document.createElement('textarea');
+      textarea.value = content;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      copyStatus = 'copied';
+      setTimeout(() => { copyStatus = 'idle'; }, 2000);
+    }
+  }
 </script>
 
 <div class="editor-tab">
@@ -30,6 +53,19 @@
         <span class="patient-name">— {$selectedRecording.patient_name}</span>
       {/if}
     </div>
+    {#if content}
+      <button
+        class="btn-copy"
+        class:copied={copyStatus === 'copied'}
+        onclick={handleCopy}
+      >
+        {#if copyStatus === 'copied'}
+          Copied!
+        {:else}
+          Copy
+        {/if}
+      </button>
+    {/if}
   </div>
 
   {#if content === null}
@@ -82,6 +118,29 @@
   .patient-name {
     font-size: 13px;
     color: var(--text-muted);
+  }
+
+  .btn-copy {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background-color: var(--bg-tertiary, #374151);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .btn-copy:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .btn-copy.copied {
+    color: var(--success, #22c55e);
+    border-color: var(--success, #22c55e);
+    background-color: color-mix(in srgb, var(--success, #22c55e) 10%, transparent);
   }
 
   .empty-state {

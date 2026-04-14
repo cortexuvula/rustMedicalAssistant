@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use medical_core::types::rag::RagResult;
 use medical_db::recordings::RecordingsRepo;
 use medical_db::vectors::VectorsRepo;
@@ -32,11 +34,14 @@ pub async fn ingest_document(
 ) -> Result<IngestResult, String> {
     let uuid = Uuid::parse_str(&recording_id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
-    // Load the recording from the database
-    let recording = {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?
-    };
+    // Load the recording from the database on a blocking thread.
+    let db = Arc::clone(&state.db);
+    let recording = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().map_err(|e| e.to_string())?;
+        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
     // Extract transcript text
     let transcript = recording
@@ -53,7 +58,7 @@ pub async fn ingest_document(
         .as_deref()
         .unwrap_or(&recording.filename);
 
-    // Run the ingestion pipeline
+    // Run the ingestion pipeline (async — involves embedding API calls)
     let chunks_created = state
         .ingestion
         .ingest_text(uuid, title, transcript)
@@ -79,24 +84,33 @@ pub async fn search_rag(
     let top_k = top_k.unwrap_or(5) as usize;
     let fetch_k = top_k * 2;
 
-    // 1. Embed the query
+    // 1. Embed the query (async — calls embedding API)
     let query_embedding = state
         .embedding_generator
         .embed(&query)
         .await
         .map_err(|e| format!("Embedding failed: {e}"))?;
 
-    // 2. Vector search
-    let vector_results = state
-        .vector_store
-        .search(&query_embedding, fetch_k, 0.3)
-        .map_err(|e| format!("Vector search failed: {e}"))?;
+    // 2. Vector + BM25 search on blocking threads (both hit SQLite)
+    let vs = Arc::clone(&state.vector_store);
+    let embedding_clone = query_embedding.clone();
+    let vector_handle = tokio::task::spawn_blocking(move || {
+        vs.search(&embedding_clone, fetch_k, 0.3)
+            .map_err(|e| format!("Vector search failed: {e}"))
+    });
 
-    // 3. BM25 search
-    let bm25_results = state
-        .bm25_search
-        .search(&query, fetch_k)
-        .map_err(|e| format!("BM25 search failed: {e}"))?;
+    let bm25 = Arc::clone(&state.bm25_search);
+    let query_clone = query.clone();
+    let bm25_handle = tokio::task::spawn_blocking(move || {
+        bm25.search(&query_clone, fetch_k)
+            .map_err(|e| format!("BM25 search failed: {e}"))
+    });
+
+    // Await both searches concurrently
+    let (vector_results, bm25_results) = tokio::try_join!(
+        async { vector_handle.await.map_err(|e| format!("Task join error: {e}"))? },
+        async { bm25_handle.await.map_err(|e| format!("Task join error: {e}"))? },
+    )?;
 
     // 4. Fuse with RRF
     let mut fused = reciprocal_rank_fusion(&[vector_results, bm25_results], 60.0);

@@ -33,36 +33,88 @@ struct GenerationProgress {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Load a recording from DB and acquire the AI provider from saved settings.
-async fn get_provider_and_recording(
-    state: &AppState,
+/// Loaded settings needed for generation.
+struct GenerationSettings {
+    model: String,
+    temperature: f32,
+    icd_version: String,
+    ai_provider: String,
+    custom_soap_prompt: Option<String>,
+}
+
+/// Load a recording and settings from DB on a blocking thread.
+///
+/// All rusqlite work is offloaded via `spawn_blocking` so we never block the
+/// Tokio async runtime.
+async fn load_recording_and_settings(
+    db: &Arc<medical_db::Database>,
     recording_id: &str,
-) -> Result<(Arc<dyn AiProvider>, Recording), String> {
-    // Read the provider name from settings so we always match the stored model.
-    let provider_name = {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        medical_db::settings::SettingsRepo::load_config(&conn)
-            .map(|cfg| cfg.ai_provider)
-            .unwrap_or_else(|_| "openai".to_string())
-    };
-
-    let provider = {
-        let registry = state.ai_providers.lock().await;
-        registry
-            .get_arc(&provider_name)
-            .or_else(|| registry.get_active_arc())
-            .ok_or("No AI provider configured. Add an API key in Settings.")?
-    };
-
+) -> Result<(Recording, GenerationSettings), String> {
     let uuid =
         Uuid::parse_str(recording_id).map_err(|e| format!("Invalid recording ID: {e}"))?;
+    let db = Arc::clone(db);
 
-    let recording = {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?
-    };
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn().map_err(|e| e.to_string())?;
 
-    Ok((provider, recording))
+        let recording =
+            RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?;
+
+        let config = medical_db::settings::SettingsRepo::load_config(&conn).ok();
+        let settings = match config {
+            Some(cfg) => {
+                let icd = match cfg.icd_version {
+                    medical_core::types::settings::IcdVersion::Icd9 => "ICD-9".to_string(),
+                    medical_core::types::settings::IcdVersion::Icd10 => "ICD-10".to_string(),
+                    medical_core::types::settings::IcdVersion::Both => "both".to_string(),
+                };
+                GenerationSettings {
+                    model: cfg.ai_model,
+                    temperature: cfg.temperature,
+                    icd_version: icd,
+                    ai_provider: cfg.ai_provider,
+                    custom_soap_prompt: cfg.custom_soap_prompt,
+                }
+            }
+            None => GenerationSettings {
+                model: "gpt-4o".to_string(),
+                temperature: 0.4,
+                icd_version: "ICD-10".to_string(),
+                ai_provider: "openai".to_string(),
+                custom_soap_prompt: None,
+            },
+        };
+
+        Ok((recording, settings))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
+}
+
+/// Resolve the AI provider from the registry using the settings provider name.
+async fn resolve_provider(
+    state: &AppState,
+    provider_name: &str,
+) -> Result<Arc<dyn AiProvider>, String> {
+    let registry = state.ai_providers.lock().await;
+    registry
+        .get_arc(provider_name)
+        .or_else(|| registry.get_active_arc())
+        .ok_or_else(|| "No AI provider configured. Add an API key in Settings.".to_string())
+}
+
+/// Persist a recording update on a blocking thread.
+async fn persist_recording(
+    db: &Arc<medical_db::Database>,
+    recording: Recording,
+) -> Result<(), String> {
+    let db = Arc::clone(db);
+    tokio::task::spawn_blocking(move || {
+        let conn = db.conn().map_err(|e| e.to_string())?;
+        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
 }
 
 /// Parse a template string into the `SoapTemplate` enum.
@@ -74,16 +126,6 @@ fn parse_soap_template(s: &str) -> SoapTemplate {
         "pediatric" => SoapTemplate::Pediatric,
         "geriatric" => SoapTemplate::Geriatric,
         _ => SoapTemplate::FollowUp, // default
-    }
-}
-
-/// Load the user's AI model and temperature from saved settings.
-fn load_ai_settings(state: &AppState) -> (String, f32) {
-    let conn = state.db.conn().ok();
-    let config = conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok());
-    match config {
-        Some(cfg) => (cfg.ai_model, cfg.temperature),
-        None => ("gpt-4o".to_string(), 0.4),
     }
 }
 
@@ -121,6 +163,7 @@ pub async fn generate_soap(
     state: tauri::State<'_, AppState>,
     recording_id: String,
     template: Option<String>,
+    context: Option<String>,
 ) -> Result<String, String> {
     // Emit: started
     let _ = app.emit(
@@ -132,7 +175,7 @@ pub async fn generate_soap(
         },
     );
 
-    let result = generate_soap_inner(&state, &recording_id, template.as_deref()).await;
+    let result = generate_soap_inner(&state, &recording_id, template.as_deref(), context.as_deref()).await;
 
     match &result {
         Ok(_) => {
@@ -164,8 +207,11 @@ async fn generate_soap_inner(
     state: &AppState,
     recording_id: &str,
     template: Option<&str>,
+    context: Option<&str>,
 ) -> Result<String, String> {
-    let (provider, mut recording) = get_provider_and_recording(state, recording_id).await?;
+    let (mut recording, settings) =
+        load_recording_and_settings(&state.db, recording_id).await?;
+    let provider = resolve_provider(state, &settings.ai_provider).await?;
 
     let transcript = recording
         .transcript
@@ -173,43 +219,62 @@ async fn generate_soap_inner(
         .filter(|t| !t.is_empty())
         .ok_or("Recording has no transcript. Run transcription first.")?;
 
-    // Build prompts
+    // Build prompts with full config
     let soap_template = template.map(parse_soap_template).unwrap_or_default();
     let config = SoapPromptConfig {
         template: soap_template,
-        icd_version: "ICD-10".into(),
-        custom_prompt: None,
+        icd_version: settings.icd_version,
+        custom_prompt: settings.custom_soap_prompt,
         include_context: true,
+        provider: Some(settings.ai_provider),
     };
 
     let system_prompt = soap_generator::build_soap_prompt(&config);
-    let user_prompt = soap_generator::build_user_prompt(transcript, None);
+    let user_prompt = soap_generator::build_user_prompt(transcript, context);
 
     debug!(
-        "generate_soap: provider='{}', recording='{}'",
+        "generate_soap: provider='{}', recording='{}', context_len={}, context_preview='{}'",
         provider.name(),
         recording_id,
+        context.map(|c| c.len()).unwrap_or(0),
+        context.map(|c| &c[..c.len().min(100)]).unwrap_or("(none)"),
     );
 
-    let (model, temperature) = load_ai_settings(state);
-    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
+    let request = build_completion_request(
+        system_prompt,
+        user_prompt,
+        settings.model,
+        settings.temperature,
+    );
 
     let response = provider
         .complete(request)
         .await
         .map_err(|e| format!("AI completion failed: {e}"))?;
 
-    let soap_text = response.content;
-    if soap_text.is_empty() {
+    let raw_soap = response.content;
+    if raw_soap.is_empty() {
         return Err("AI returned an empty SOAP note.".into());
     }
 
-    // Persist to DB
-    recording.soap_note = Some(soap_text.clone());
-    {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
+    // Post-process: strip markdown, fix paragraph formatting
+    let soap_text = soap_generator::postprocess_soap(&raw_soap);
+
+    // Save context to recording metadata for future reference
+    if let Some(ctx) = context {
+        if !ctx.is_empty() {
+            if recording.metadata.is_null() {
+                recording.metadata = serde_json::json!({});
+            }
+            if let Some(obj) = recording.metadata.as_object_mut() {
+                obj.insert("context".to_string(), serde_json::Value::String(ctx.to_string()));
+            }
+        }
     }
+
+    // Persist to DB (on blocking thread)
+    recording.soap_note = Some(soap_text.clone());
+    persist_recording(&state.db, recording).await?;
 
     Ok(soap_text)
 }
@@ -274,7 +339,9 @@ async fn generate_referral_inner(
     recipient_type: Option<&str>,
     urgency: Option<&str>,
 ) -> Result<String, String> {
-    let (provider, mut recording) = get_provider_and_recording(state, recording_id).await?;
+    let (mut recording, settings) =
+        load_recording_and_settings(&state.db, recording_id).await?;
+    let provider = resolve_provider(state, &settings.ai_provider).await?;
 
     let soap_note = recording
         .soap_note
@@ -296,8 +363,12 @@ async fn generate_referral_inner(
         urg,
     );
 
-    let (model, temperature) = load_ai_settings(state);
-    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
+    let request = build_completion_request(
+        system_prompt,
+        user_prompt,
+        settings.model,
+        settings.temperature,
+    );
 
     let response = provider
         .complete(request)
@@ -309,12 +380,9 @@ async fn generate_referral_inner(
         return Err("AI returned an empty referral letter.".into());
     }
 
-    // Persist to DB
+    // Persist to DB (on blocking thread)
     recording.referral = Some(referral_text.clone());
-    {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
-    }
+    persist_recording(&state.db, recording).await?;
 
     Ok(referral_text)
 }
@@ -372,7 +440,9 @@ async fn generate_letter_inner(
     recording_id: &str,
     letter_type: Option<&str>,
 ) -> Result<String, String> {
-    let (provider, mut recording) = get_provider_and_recording(state, recording_id).await?;
+    let (mut recording, settings) =
+        load_recording_and_settings(&state.db, recording_id).await?;
+    let provider = resolve_provider(state, &settings.ai_provider).await?;
 
     let soap_note = recording
         .soap_note
@@ -392,8 +462,12 @@ async fn generate_letter_inner(
         ltype,
     );
 
-    let (model, temperature) = load_ai_settings(state);
-    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
+    let request = build_completion_request(
+        system_prompt,
+        user_prompt,
+        settings.model,
+        settings.temperature,
+    );
 
     let response = provider
         .complete(request)
@@ -405,12 +479,9 @@ async fn generate_letter_inner(
         return Err("AI returned an empty letter.".into());
     }
 
-    // Persist to DB
+    // Persist to DB (on blocking thread)
     recording.letter = Some(letter_text.clone());
-    {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
-    }
+    persist_recording(&state.db, recording).await?;
 
     Ok(letter_text)
 }
@@ -424,8 +495,9 @@ pub async fn generate_synopsis(
     state: tauri::State<'_, AppState>,
     recording_id: String,
 ) -> Result<String, String> {
-    let (provider, mut recording) =
-        get_provider_and_recording(&state, &recording_id).await?;
+    let (mut recording, settings) =
+        load_recording_and_settings(&state.db, &recording_id).await?;
+    let provider = resolve_provider(&state, &settings.ai_provider).await?;
 
     let soap_note = recording
         .soap_note
@@ -441,8 +513,12 @@ pub async fn generate_synopsis(
         recording_id,
     );
 
-    let (model, temperature) = load_ai_settings(&*state);
-    let request = build_completion_request(system_prompt, user_prompt, model, temperature);
+    let request = build_completion_request(
+        system_prompt,
+        user_prompt,
+        settings.model,
+        settings.temperature,
+    );
 
     let response = provider
         .complete(request)
@@ -464,10 +540,7 @@ pub async fn generate_synopsis(
             serde_json::Value::String(synopsis_text.clone()),
         );
     }
-    {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
-    }
+    persist_recording(&state.db, recording).await?;
 
     Ok(synopsis_text)
 }

@@ -49,6 +49,7 @@ export interface RecordingSummary {
 export interface AppConfig {
   theme: 'dark' | 'light';
   language: string;
+  storage_path: string | null;
   ai_provider: string;
   ai_model: string;
   stt_provider: string;

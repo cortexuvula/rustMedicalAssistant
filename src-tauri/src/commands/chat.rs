@@ -50,6 +50,17 @@ struct ErrorPayload {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Load the AI model and temperature from saved settings.
+/// Falls back to sensible defaults if settings can't be read.
+fn load_chat_settings(state: &tauri::State<'_, AppState>) -> (String, f32) {
+    let conn = state.db.conn().ok();
+    let config = conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok());
+    match config {
+        Some(cfg) => (cfg.ai_model, cfg.temperature),
+        None => ("gpt-4o".to_string(), 0.7),
+    }
+}
+
 /// Convert a frontend role string to the core `Role` enum.
 fn parse_role(s: &str) -> Role {
     match s.to_lowercase().as_str() {
@@ -102,6 +113,9 @@ pub async fn chat_send(
     model: Option<String>,
     system_prompt: Option<String>,
 ) -> Result<String, String> {
+    // Load model/temperature from settings when not explicitly provided
+    let (settings_model, settings_temp) = load_chat_settings(&state);
+
     let provider = {
         let registry = state.ai_providers.lock().await;
         registry.get_active_arc()
@@ -111,9 +125,9 @@ pub async fn chat_send(
     let core_messages = convert_messages(messages);
 
     let request = CompletionRequest {
-        model: model.unwrap_or_else(|| "gpt-4o".to_string()),
+        model: model.unwrap_or(settings_model),
         messages: core_messages,
-        temperature: Some(0.7),
+        temperature: Some(settings_temp),
         max_tokens: Some(4096),
         system_prompt,
     };
@@ -142,6 +156,9 @@ pub async fn chat_stream(
     model: Option<String>,
     system_prompt: Option<String>,
 ) -> Result<(), String> {
+    // Load model/temperature from settings when not explicitly provided
+    let (settings_model, settings_temp) = load_chat_settings(&state);
+
     let provider = {
         let registry = state.ai_providers.lock().await;
         registry.get_active_arc()
@@ -151,9 +168,9 @@ pub async fn chat_stream(
     let core_messages = convert_messages(messages);
 
     let request = CompletionRequest {
-        model: model.unwrap_or_else(|| "gpt-4o".to_string()),
+        model: model.unwrap_or(settings_model),
         messages: core_messages,
-        temperature: Some(0.7),
+        temperature: Some(settings_temp),
         max_tokens: Some(4096),
         system_prompt,
     };

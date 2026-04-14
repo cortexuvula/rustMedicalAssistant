@@ -5,6 +5,7 @@
   import { listApiKeys, setApiKey } from '../api/settings';
   import { listModels, setActiveProvider, type ModelInfo } from '../api/chat';
   import { listAudioDevices } from '../api/audio';
+  import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import type { AudioDevice } from '../types';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
@@ -32,6 +33,8 @@
 
   let availableModels = $state<ModelInfo[]>([]);
   let modelsLoading = $state(false);
+  // Remember last-selected model per provider so switching back restores it
+  let modelMemory = $state<Record<string, string>>({});
 
   let audioDevices = $state<AudioDevice[]>([]);
   let devicesLoading = $state(false);
@@ -61,13 +64,21 @@
   }
 
   onMount(async () => {
-    try {
-      storedKeys = await listApiKeys();
-    } catch (err) {
-      console.error('Failed to list API keys:', err);
+    // Seed model memory with the current provider's model
+    if ($settings.ai_provider && $settings.ai_model) {
+      modelMemory[$settings.ai_provider] = $settings.ai_model;
     }
-    await fetchModelsForProvider($settings.ai_provider);
-    await fetchAudioDevices();
+    // Run independent fetches in parallel
+    const [keys] = await Promise.allSettled([
+      listApiKeys(),
+      fetchModelsForProvider($settings.ai_provider),
+      fetchAudioDevices(),
+    ]);
+    if (keys.status === 'fulfilled') {
+      storedKeys = keys.value;
+    } else {
+      console.error('Failed to list API keys:', keys.reason);
+    }
   });
 
   async function handleSaveApiKey(provider: string) {
@@ -108,13 +119,36 @@
     }
   }
 
+  async function handleBrowseStoragePath() {
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: 'Select Recording Storage Folder',
+    });
+    if (selected) {
+      await settings.updateField('storage_path', selected);
+    }
+  }
+
+  async function handleResetStoragePath() {
+    await settings.updateField('storage_path', null);
+  }
+
   async function handleAiProviderChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value;
-    await settings.updateField('ai_provider', value);
-    await setActiveProvider(value);
-    await fetchModelsForProvider(value);
-    // Auto-select first model for the new provider
-    if (availableModels.length > 0) {
+    const newProvider = (e.target as HTMLSelectElement).value;
+    // Remember the current model for the outgoing provider
+    const oldProvider = $settings.ai_provider;
+    if (oldProvider && $settings.ai_model) {
+      modelMemory[oldProvider] = $settings.ai_model;
+    }
+    await settings.updateField('ai_provider', newProvider);
+    await setActiveProvider(newProvider);
+    await fetchModelsForProvider(newProvider);
+    // Restore remembered model if it exists in the new provider's list
+    const remembered = modelMemory[newProvider];
+    if (remembered && availableModels.some((m) => m.id === remembered)) {
+      await settings.updateField('ai_model', remembered);
+    } else if (availableModels.length > 0) {
       await settings.updateField('ai_model', availableModels[0].id);
     }
   }
@@ -122,6 +156,8 @@
   async function handleAiModelChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
     await settings.updateField('ai_model', value);
+    // Remember this selection for the current provider
+    modelMemory[$settings.ai_provider] = value;
   }
 
   async function handleTemperatureChange(e: Event) {
@@ -212,6 +248,24 @@
               disabled={!$settings.autosave_enabled}
             />
             <span class="form-hint">Between 10 and 600 seconds</span>
+          </div>
+
+          <div class="form-group">
+            <span class="form-label">Recording Storage Folder</span>
+            <div class="storage-path-row">
+              <span class="storage-path-display">
+                {$settings.storage_path || 'Default (application data)'}
+              </span>
+              <button class="btn-browse" onclick={handleBrowseStoragePath}>
+                Browse
+              </button>
+              {#if $settings.storage_path}
+                <button class="btn-reset" onclick={handleResetStoragePath}>
+                  Reset
+                </button>
+              {/if}
+            </div>
+            <span class="form-hint">Choose where audio recordings are saved. New recordings will use this folder.</span>
           </div>
         </section>
 
@@ -491,6 +545,57 @@
   .checkbox-label input[type='checkbox'] {
     width: auto;
     cursor: pointer;
+  }
+
+  /* Storage Path */
+  .storage-path-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .storage-path-display {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-muted);
+    background-color: var(--bg-tertiary, #374151);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .btn-browse,
+  .btn-reset {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-browse {
+    background-color: var(--accent);
+    color: var(--text-inverse);
+  }
+
+  .btn-browse:hover {
+    background-color: var(--accent-hover);
+  }
+
+  .btn-reset {
+    color: var(--text-secondary);
+    background-color: var(--bg-tertiary, #374151);
+    border: 1px solid var(--border);
+  }
+
+  .btn-reset:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   /* API Keys */
