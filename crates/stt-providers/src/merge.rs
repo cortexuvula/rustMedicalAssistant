@@ -2,23 +2,8 @@
 
 use medical_core::types::TranscriptSegment;
 
-/// A timestamped segment from whisper transcription.
-/// (Will be moved to whisper.rs when that module is created)
-#[derive(Debug, Clone)]
-pub struct WhisperSegment {
-    pub text: String,
-    pub start: f64,
-    pub end: f64,
-}
-
-/// A speaker turn from diarization.
-/// (Will be moved to diarization.rs when that module is created)
-#[derive(Debug, Clone)]
-pub struct SpeakerTurn {
-    pub speaker_id: usize,
-    pub start: f64,
-    pub end: f64,
-}
+use crate::diarization::SpeakerTurn;
+use crate::whisper::WhisperSegment;
 
 /// Merge whisper text segments with speaker turns.
 ///

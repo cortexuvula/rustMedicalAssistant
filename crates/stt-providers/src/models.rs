@@ -160,7 +160,7 @@ pub fn check_required_models(app_data_dir: &Path, whisper_model_id: &str) -> Vec
     // Pyannote stub models (diarization — currently not available but reserved)
     let pyannote_stubs = [
         ("segmentation-3.0.onnx", "Pyannote segmentation model"),
-        ("embedding.onnx", "Pyannote speaker embedding model"),
+        ("wespeaker_en_voxceleb_CAM++.onnx", "Pyannote speaker embedding model"),
     ];
     for (filename, description) in &pyannote_stubs {
         let path = pyannote_model_path(app_data_dir, filename);

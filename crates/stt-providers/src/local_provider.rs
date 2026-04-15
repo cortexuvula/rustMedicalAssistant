@@ -113,27 +113,8 @@ impl SttProvider for LocalSttProvider {
         };
 
         // Stage 4: Merge whisper segments with speaker turns
-        // Convert our whisper segments to the merge module's WhisperSegment type
-        let merge_segments: Vec<merge::WhisperSegment> = whisper_segments
-            .iter()
-            .map(|ws| merge::WhisperSegment {
-                text: ws.text.clone(),
-                start: ws.start,
-                end: ws.end,
-            })
-            .collect();
-
-        let merge_turns: Vec<merge::SpeakerTurn> = speaker_turns
-            .iter()
-            .map(|st| merge::SpeakerTurn {
-                speaker_id: st.speaker_id,
-                start: st.start,
-                end: st.end,
-            })
-            .collect();
-
         let segments: Vec<TranscriptSegment> =
-            merge::merge_segments_with_speakers(&merge_segments, &merge_turns);
+            merge::merge_segments_with_speakers(&whisper_segments, &speaker_turns);
 
         let full_text: String = segments
             .iter()
