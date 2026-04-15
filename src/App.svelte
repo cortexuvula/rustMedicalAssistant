@@ -10,6 +10,10 @@
   import StatusBar from './lib/components/StatusBar.svelte';
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
   import { selectedRecording } from './lib/stores/recordings';
+  import { pipeline } from './lib/stores/pipeline';
+  import { toasts } from './lib/stores/toasts';
+  import ToastContainer from './lib/components/ToastContainer.svelte';
+  import { selectRecording } from './lib/stores/recordings';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
@@ -33,6 +37,14 @@
   });
 
   let progressUnlisten: UnlistenFn | null = null;
+  let pipelineCompleteUnlisten: UnlistenFn | null = null;
+  let pipelineFailedUnlisten: UnlistenFn | null = null;
+  let settingsUnsubscribe: (() => void) | null = null;
+
+  async function navigateToSoap(tab: string, recordingId: string) {
+    await selectRecording(recordingId);
+    activeTab = tab;
+  }
 
   onMount(async () => {
     // Listen for generation progress events globally so state persists across tab switches
@@ -45,14 +57,47 @@
 
     await settings.load();
     // Set theme from loaded settings
-    const unsubscribe = settings.subscribe((cfg) => {
+    settingsUnsubscribe = settings.subscribe((cfg) => {
       theme.set(cfg.theme);
     });
-    return unsubscribe;
+
+    await pipeline.init();
+
+    pipelineCompleteUnlisten = await listen<{ recording_id: string; display_name: string }>(
+      'pipeline-complete',
+      (event) => {
+        const { recording_id, display_name } = event.payload;
+        toasts.add({
+          message: `SOAP note ready for ${display_name}`,
+          type: 'success',
+          recordingId: recording_id,
+          displayName: display_name,
+          autoDismiss: true,
+        });
+      },
+    );
+
+    pipelineFailedUnlisten = await listen<{ recording_id: string; stage: string; error?: string }>(
+      'pipeline-progress',
+      (event) => {
+        if (event.payload.stage === 'failed') {
+          toasts.add({
+            message: `Processing failed: ${event.payload.error ?? 'Unknown error'}`,
+            type: 'error',
+            recordingId: event.payload.recording_id,
+            autoDismiss: false,
+          });
+        }
+      },
+    );
   });
 
   onDestroy(() => {
     progressUnlisten?.();
+    settingsUnsubscribe?.();
+    pipeline.destroy();
+    pipelineCompleteUnlisten?.();
+    pipelineFailedUnlisten?.();
   });
 </script>
 
@@ -91,6 +136,8 @@
   <footer class="app-statusbar">
     <StatusBar />
   </footer>
+
+  <ToastContainer onNavigate={navigateToSoap} />
 </div>
 
 <SettingsDialog bind:open={settingsOpen} />
