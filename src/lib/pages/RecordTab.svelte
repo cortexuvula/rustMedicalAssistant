@@ -3,7 +3,7 @@
   import { settings } from '../stores/settings';
   import { pipeline, type PipelineStage } from '../stores/pipeline';
   import { recordings } from '../stores/recordings';
-  import { importAudioFile } from '../api/recordings';
+  import { importAudioFile, getRecording } from '../api/recordings';
   import RecordingHeader from '../components/RecordingHeader.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
 
@@ -101,7 +101,6 @@
     const rid = pipelineRecordingId;
     if (!rid) return;
     try {
-      const { getRecording } = await import('../api/recordings');
       const rec = await getRecording(rid);
       if (rec?.soap_note) {
         await navigator.clipboard.writeText(rec.soap_note);
