@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Recording } from '../types';
   import { selectedRecording } from '../stores/recordings';
+  import { copyToClipboard } from '../utils/clipboard';
   import TextEditor from '../components/TextEditor.svelte';
 
   let { tabId }: { tabId: 'transcript' | 'soap' | 'referral' | 'letter' } = $props();
@@ -25,23 +26,9 @@
 
   async function handleCopy() {
     if (!content) return;
-    try {
-      await navigator.clipboard.writeText(content);
-      copyStatus = 'copied';
-      setTimeout(() => { copyStatus = 'idle'; }, 2000);
-    } catch {
-      // Fallback for environments where clipboard API is restricted
-      const textarea = document.createElement('textarea');
-      textarea.value = content;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      copyStatus = 'copied';
-      setTimeout(() => { copyStatus = 'idle'; }, 2000);
-    }
+    await copyToClipboard(content);
+    copyStatus = 'copied';
+    setTimeout(() => { copyStatus = 'idle'; }, 2000);
   }
 </script>
 
@@ -81,7 +68,7 @@
       <p>Go to the <strong>Generate</strong> tab to create this document.</p>
     </div>
   {:else}
-    <TextEditor value={content} placeholder="No content…" />
+    <TextEditor value={content} placeholder="No content…" readonly />
   {/if}
 </div>
 

@@ -1,17 +1,22 @@
 <script lang="ts">
-  export let value: string = '';
-  export let placeholder: string = '';
-  export let readonly: boolean = false;
-  export let onChange: (v: string) => void = () => {};
+  interface Props {
+    value?: string;
+    placeholder?: string;
+    readonly?: boolean;
+    onChange?: (v: string) => void;
+  }
+
+  let { value = '', placeholder = '', readonly = false, onChange = () => {} }: Props = $props();
 </script>
 
 <div class="text-editor">
   <textarea
     {value}
     {placeholder}
-    {readonly}
+    readonly={readonly}
     class="editor-area"
-    on:input={(e) => onChange((e.target as HTMLTextAreaElement).value)}
+    class:readonly
+    oninput={(e) => onChange((e.target as HTMLTextAreaElement).value)}
   ></textarea>
 </div>
 
@@ -45,8 +50,9 @@
     box-shadow: none;
   }
 
-  .editor-area[readonly] {
+  .editor-area.readonly {
     cursor: default;
     color: var(--text-secondary);
+    user-select: text;
   }
 </style>

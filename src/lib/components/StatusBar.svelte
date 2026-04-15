@@ -1,22 +1,17 @@
 <script lang="ts">
   import { audio } from '../stores/audio';
   import { settings } from '../stores/settings';
-
-  function formatTime(seconds: number): string {
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const s = (seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  }
+  import { formatDuration } from '../utils/format';
 </script>
 
 <div class="statusbar">
   <div class="status-left">
     {#if $audio.state === 'recording'}
       <span class="status-indicator recording">● REC</span>
-      <span class="status-timer">{formatTime($audio.elapsed)}</span>
+      <span class="status-timer">{formatDuration($audio.elapsed)}</span>
     {:else if $audio.state === 'paused'}
       <span class="status-indicator paused">⏸ PAUSED</span>
-      <span class="status-timer">{formatTime($audio.elapsed)}</span>
+      <span class="status-timer">{formatDuration($audio.elapsed)}</span>
     {:else if $audio.state === 'stopped'}
       <span class="status-indicator stopped">■ Stopped</span>
     {:else}

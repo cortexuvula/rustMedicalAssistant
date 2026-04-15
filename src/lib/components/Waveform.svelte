@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { audio } from '../stores/audio';
 
   let canvas: HTMLCanvasElement | undefined = $state();
+  let canvasWidth = $state(600);
+  let canvasHeight = $state(80);
+  let resizeObserver: ResizeObserver | null = null;
 
   function draw() {
     if (!canvas) return;
@@ -13,12 +16,10 @@
     const h = canvas.height;
     const data = $audio.waveformData;
 
-    // Background
     const style = getComputedStyle(canvas);
     ctx.fillStyle = style.getPropertyValue('--bg-tertiary').trim() || '#2c2e33';
     ctx.fillRect(0, 0, w, h);
 
-    // Center line
     ctx.strokeStyle = style.getPropertyValue('--border').trim() || '#373a40';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -28,7 +29,6 @@
 
     if (data.length === 0) return;
 
-    // Bars
     const accent = style.getPropertyValue('--accent').trim() || '#5c7cfa';
     ctx.fillStyle = accent;
 
@@ -46,21 +46,37 @@
     }
   }
 
-  // Reactive redraw when waveformData changes
+  function updateCanvasSize() {
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvasWidth = Math.round(rect.width * dpr);
+    canvasHeight = Math.round(rect.height * dpr);
+    draw();
+  }
+
   $effect(() => {
     const _ = $audio.waveformData;
     draw();
   });
 
   onMount(() => {
-    draw();
+    if (canvas) {
+      resizeObserver = new ResizeObserver(() => updateCanvasSize());
+      resizeObserver.observe(canvas);
+      updateCanvasSize();
+    }
+  });
+
+  onDestroy(() => {
+    resizeObserver?.disconnect();
   });
 </script>
 
 <canvas
   bind:this={canvas}
-  width={600}
-  height={80}
+  width={canvasWidth}
+  height={canvasHeight}
   class="waveform-canvas"
 ></canvas>
 

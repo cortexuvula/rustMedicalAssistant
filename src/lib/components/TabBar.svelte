@@ -1,6 +1,10 @@
 <script lang="ts">
-  export let tabs: { id: string; label: string }[] = [];
-  export let activeTab: string = '';
+  interface Props {
+    tabs: { id: string; label: string }[];
+    activeTab: string;
+  }
+
+  let { tabs = [], activeTab = $bindable('') }: Props = $props();
 </script>
 
 <div class="tabbar">
@@ -8,7 +12,7 @@
     <button
       class="tab"
       class:active={activeTab === tab.id}
-      on:click={() => (activeTab = tab.id)}
+      onclick={() => (activeTab = tab.id)}
     >
       {tab.label}
     </button>

@@ -2,6 +2,8 @@
   import { selectedRecording, recordings, selectRecording } from '../stores/recordings';
   import { generateSoap, generateReferral, generateLetter } from '../api/generation';
   import { generation } from '../stores/generation';
+  import { copyToClipboard } from '../utils/clipboard';
+  import GenerateItem from '../components/GenerateItem.svelte';
 
   let copyStatus = $state<Record<string, 'idle' | 'copied'>>({});
   let contextText = $state('');
@@ -44,18 +46,7 @@
       : type === 'referral' ? $selectedRecording.referral
       : $selectedRecording.letter;
     if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
+    await copyToClipboard(text);
     copyStatus = { ...copyStatus, [type]: 'copied' };
     setTimeout(() => { copyStatus = { ...copyStatus, [type]: 'idle' }; }, 2000);
   }
@@ -151,125 +142,36 @@
       {/if}
 
       <div class="generate-buttons">
-        <div class="generate-item">
-          <div class="item-info">
-            <div class="item-title">SOAP Note</div>
-            <div class="item-desc">Structured clinical note (Subjective, Objective, Assessment, Plan)</div>
-          </div>
-          <div class="item-action">
-            {#if $generation.generating === 'soap'}
-              <button class="btn-generate" disabled>
-                <span class="spinner"></span> Generating...
-              </button>
-            {:else if $selectedRecording.soap_note}
-              <div class="done-group">
-                <span class="done-badge">Done</span>
-                <button
-                  class="btn-copy"
-                  class:copied={copyStatus['soap'] === 'copied'}
-                  onclick={() => handleCopy('soap')}
-                >
-                  {copyStatus['soap'] === 'copied' ? 'Copied!' : 'Copy'}
-                </button>
-                <button
-                  class="btn-regenerate"
-                  onclick={() => handleGenerate('soap')}
-                  disabled={$generation.generating !== null}
-                >
-                  Regenerate
-                </button>
-              </div>
-            {:else}
-              <button
-                class="btn-generate"
-                onclick={() => handleGenerate('soap')}
-                disabled={$generation.generating !== null}
-              >
-                Generate
-              </button>
-            {/if}
-          </div>
-        </div>
-
-        <div class="generate-item">
-          <div class="item-info">
-            <div class="item-title">Referral Letter</div>
-            <div class="item-desc">Specialist referral letter based on the consultation</div>
-          </div>
-          <div class="item-action">
-            {#if $generation.generating === 'referral'}
-              <button class="btn-generate" disabled>
-                <span class="spinner"></span> Generating...
-              </button>
-            {:else if $selectedRecording.referral}
-              <div class="done-group">
-                <span class="done-badge">Done</span>
-                <button
-                  class="btn-copy"
-                  class:copied={copyStatus['referral'] === 'copied'}
-                  onclick={() => handleCopy('referral')}
-                >
-                  {copyStatus['referral'] === 'copied' ? 'Copied!' : 'Copy'}
-                </button>
-                <button
-                  class="btn-regenerate"
-                  onclick={() => handleGenerate('referral')}
-                  disabled={$generation.generating !== null}
-                >
-                  Regenerate
-                </button>
-              </div>
-            {:else}
-              <button
-                class="btn-generate"
-                onclick={() => handleGenerate('referral')}
-                disabled={$generation.generating !== null}
-              >
-                Generate
-              </button>
-            {/if}
-          </div>
-        </div>
-
-        <div class="generate-item">
-          <div class="item-info">
-            <div class="item-title">Patient Letter</div>
-            <div class="item-desc">Patient-friendly summary of the consultation</div>
-          </div>
-          <div class="item-action">
-            {#if $generation.generating === 'letter'}
-              <button class="btn-generate" disabled>
-                <span class="spinner"></span> Generating...
-              </button>
-            {:else if $selectedRecording.letter}
-              <div class="done-group">
-                <span class="done-badge">Done</span>
-                <button
-                  class="btn-copy"
-                  class:copied={copyStatus['letter'] === 'copied'}
-                  onclick={() => handleCopy('letter')}
-                >
-                  {copyStatus['letter'] === 'copied' ? 'Copied!' : 'Copy'}
-                </button>
-                <button
-                  class="btn-regenerate"
-                  onclick={() => handleGenerate('letter')}
-                  disabled={$generation.generating !== null}
-                >
-                  Regenerate
-                </button>
-              </div>
-            {:else}
-              <button
-                class="btn-generate"
-                onclick={() => handleGenerate('letter')}
-                disabled={$generation.generating !== null}
-              >
-                Generate
-              </button>
-            {/if}
-          </div>
-        </div>
+        <GenerateItem
+          title="SOAP Note"
+          description="Structured clinical note (Subjective, Objective, Assessment, Plan)"
+          generating={$generation.generating === 'soap'}
+          anyGenerating={$generation.generating !== null}
+          done={!!$selectedRecording.soap_note}
+          copyStatus={copyStatus['soap']}
+          onGenerate={() => handleGenerate('soap')}
+          onCopy={() => handleCopy('soap')}
+        />
+        <GenerateItem
+          title="Referral Letter"
+          description="Specialist referral letter based on the consultation"
+          generating={$generation.generating === 'referral'}
+          anyGenerating={$generation.generating !== null}
+          done={!!$selectedRecording.referral}
+          copyStatus={copyStatus['referral']}
+          onGenerate={() => handleGenerate('referral')}
+          onCopy={() => handleCopy('referral')}
+        />
+        <GenerateItem
+          title="Patient Letter"
+          description="Patient-friendly summary of the consultation"
+          generating={$generation.generating === 'letter'}
+          anyGenerating={$generation.generating !== null}
+          done={!!$selectedRecording.letter}
+          copyStatus={copyStatus['letter']}
+          onGenerate={() => handleGenerate('letter')}
+          onCopy={() => handleCopy('letter')}
+        />
       </div>
     </div>
   {/if}
@@ -510,134 +412,5 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-  }
-
-  .generate-item {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 16px;
-    background-color: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-  }
-
-  .item-info {
-    flex: 1;
-  }
-
-  .item-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 2px;
-  }
-
-  .item-desc {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .item-action {
-    flex-shrink: 0;
-  }
-
-  .btn-generate {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    background-color: var(--accent);
-    color: white;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    font-weight: 500;
-    transition: background-color 0.15s ease;
-  }
-
-  .btn-generate:hover:not(:disabled) {
-    background-color: var(--accent-hover);
-  }
-
-  .btn-generate:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .spinner {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-top-color: white;
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .done-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .done-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 500;
-    background-color: var(--accent-light);
-    color: var(--success);
-    border: 1px solid var(--success);
-  }
-
-  .btn-regenerate {
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--accent);
-    background-color: color-mix(in srgb, var(--accent) 10%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-  }
-
-  .btn-regenerate:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-color: var(--accent);
-  }
-
-  .btn-regenerate:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .btn-copy {
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background-color: var(--bg-tertiary, #374151);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-  }
-
-  .btn-copy:hover {
-    background-color: var(--bg-hover);
-    color: var(--text-primary);
-  }
-
-  .btn-copy.copied {
-    color: var(--success, #22c55e);
-    border-color: var(--success, #22c55e);
-    background-color: color-mix(in srgb, var(--success, #22c55e) 10%, transparent);
   }
 </style>

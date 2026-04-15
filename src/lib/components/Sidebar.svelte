@@ -3,7 +3,11 @@
   import { theme } from '../stores/theme';
   import { settings } from '../stores/settings';
 
-  export let activeTab: string = 'record';
+  interface Props {
+    activeTab: string;
+  }
+
+  let { activeTab = $bindable('record') }: Props = $props();
 
   const workflowNav = [
     { id: 'record',     label: 'Record',     icon: '🎙' },
@@ -30,7 +34,7 @@
         <button
           class="nav-item"
           class:active={activeTab === item.id}
-          on:click={() => (activeTab = item.id)}
+          onclick={() => (activeTab = item.id)}
         >
           <span class="nav-icon">{item.icon}</span>
           <span class="nav-label">{item.label}</span>
@@ -42,7 +46,7 @@
         <button
           class="nav-item"
           class:active={activeTab === item.id}
-          on:click={() => (activeTab = item.id)}
+          onclick={() => (activeTab = item.id)}
         >
           <span class="nav-icon">{item.icon}</span>
           <span class="nav-label">{item.label}</span>
@@ -52,11 +56,11 @@
   </div>
 
   <div class="sidebar-footer">
-    <button class="footer-btn" on:click={() => { theme.toggle(); settings.updateField('theme', get(theme)); }} title="Toggle theme">
+    <button class="footer-btn" onclick={() => { theme.toggle(); settings.updateField('theme', get(theme)); }} title="Toggle theme">
       <span>☀/🌙</span>
       <span>Theme</span>
     </button>
-    <button class="footer-btn" on:click={() => (activeTab = 'settings')} title="Settings">
+    <button class="footer-btn" onclick={() => (activeTab = 'settings')} title="Settings">
       <span>⚙</span>
       <span>Settings</span>
     </button>

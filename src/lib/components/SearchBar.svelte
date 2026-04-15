@@ -1,7 +1,13 @@
 <script lang="ts">
-  export let value: string = '';
-  export let placeholder: string = 'Search…';
-  export let onSearch: (query: string) => void = () => {};
+  import { onDestroy } from 'svelte';
+
+  interface Props {
+    value?: string;
+    placeholder?: string;
+    onSearch?: (query: string) => void;
+  }
+
+  let { value = $bindable(''), placeholder = 'Search…', onSearch = () => {} }: Props = $props();
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -11,6 +17,10 @@
     if (debounceTimer !== null) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => onSearch(value), 300);
   }
+
+  onDestroy(() => {
+    if (debounceTimer !== null) clearTimeout(debounceTimer);
+  });
 </script>
 
 <div class="search-bar">
@@ -18,7 +28,7 @@
     type="text"
     {value}
     {placeholder}
-    on:input={handleInput}
+    oninput={handleInput}
     class="search-input"
   />
 </div>

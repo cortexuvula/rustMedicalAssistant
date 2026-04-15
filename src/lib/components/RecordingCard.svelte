@@ -1,26 +1,15 @@
 <script lang="ts">
   import type { RecordingSummary } from '../types';
+  import { formatDate, formatDuration } from '../utils/format';
 
-  export let recording: RecordingSummary;
-  export let selected: boolean = false;
-  export let onClick: () => void = () => {};
-  export let onDelete: (() => void) | null = null;
-
-  function formatDate(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
+  interface Props {
+    recording: RecordingSummary;
+    selected?: boolean;
+    onClick?: () => void;
+    onDelete?: (() => void) | null;
   }
 
-  function formatDuration(seconds: number | null): string {
-    if (seconds === null) return '--:--';
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  }
+  let { recording, selected = false, onClick = () => {}, onDelete = null }: Props = $props();
 
   function statusIcon(status: RecordingSummary['status']): string {
     switch (status.status) {
@@ -45,7 +34,7 @@
 <div
   class="recording-card"
   class:selected
-  on:click={onClick}
+  onclick={onClick}
   role="button"
   tabindex="0"
 >
@@ -80,7 +69,7 @@
     <button
       class="btn-delete"
       title="Delete recording"
-      on:click|stopPropagation={onDelete}
+      onclick={(e: MouseEvent) => { e.stopPropagation(); onDelete!(); }}
     >
       ×
     </button>

@@ -1,12 +1,8 @@
 <script lang="ts">
   import type { ChatMessage } from '../types';
+  import { formatTimestamp } from '../utils/format';
 
   let { message }: { message: ChatMessage } = $props();
-
-  function formatTime(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  }
 
   const isUser = $derived(message.role === 'user');
   const roleName = $derived(
@@ -18,7 +14,7 @@
   <div class="bubble">
     <div class="meta">
       <span class="role">{roleName}</span>
-      <span class="time">{formatTime(message.timestamp)}</span>
+      <span class="time">{formatTimestamp(message.timestamp)}</span>
     </div>
     <div class="content">{message.content}</div>
 
