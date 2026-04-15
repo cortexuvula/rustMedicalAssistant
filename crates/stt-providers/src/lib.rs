@@ -1,10 +1,12 @@
 pub mod audio_prep;
+pub mod diarization;
 pub mod failover;
 pub mod deepgram;
 pub mod groq_whisper;
 pub mod elevenlabs_stt;
 pub mod modulate;
 pub mod whisper_local;
+pub mod whisper;
 pub mod merge;
 pub mod models;
 
