@@ -46,6 +46,12 @@
   }
 
   onMount(async () => {
+    // Tear down any prior listeners (Vite HMR re-runs onMount without onDestroy)
+    progressUnlisten?.();
+    pipelineCompleteUnlisten?.();
+    pipelineFailedUnlisten?.();
+    pipeline.destroy();
+
     // Listen for generation progress events globally so state persists across tab switches
     progressUnlisten = await listen<{ type: string; status: string }>(
       'generation-progress',
