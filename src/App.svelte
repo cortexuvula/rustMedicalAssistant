@@ -9,11 +9,10 @@
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
-  import { selectedRecording } from './lib/stores/recordings';
+  import { selectedRecording, selectRecording } from './lib/stores/recordings';
   import { pipeline } from './lib/stores/pipeline';
   import { toasts } from './lib/stores/toasts';
   import ToastContainer from './lib/components/ToastContainer.svelte';
-  import { selectRecording } from './lib/stores/recordings';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
