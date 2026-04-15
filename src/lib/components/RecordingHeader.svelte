@@ -2,6 +2,28 @@
   import { audio } from '../stores/audio';
   import { formatDuration } from '../utils/format';
   import Waveform from './Waveform.svelte';
+
+  interface Props {
+    onStart?: () => void;
+    onStop?: () => void;
+  }
+  let { onStart, onStop }: Props = $props();
+
+  function handleStart() {
+    if (onStart) {
+      onStart();
+    } else {
+      audio.startRecording();
+    }
+  }
+
+  function handleStop() {
+    if (onStop) {
+      onStop();
+    } else {
+      audio.stop();
+    }
+  }
 </script>
 
 <div class="recording-header">
@@ -19,14 +41,14 @@
 
     <div class="controls">
       {#if $audio.state === 'idle'}
-        <button class="btn btn-record" onclick={() => audio.startRecording()}>
+        <button class="btn btn-record" onclick={handleStart}>
           <span class="btn-icon">●</span> Record
         </button>
       {:else if $audio.state === 'recording'}
         <button class="btn btn-pause" onclick={() => audio.pause()}>
           <span class="btn-icon">⏸</span> Pause
         </button>
-        <button class="btn btn-stop" onclick={() => audio.stop()}>
+        <button class="btn btn-stop" onclick={handleStop}>
           <span class="btn-icon">■</span> Stop
         </button>
         <button class="btn btn-cancel" onclick={() => audio.cancel()}>
@@ -36,7 +58,7 @@
         <button class="btn btn-resume" onclick={() => audio.resume()}>
           <span class="btn-icon">▶</span> Resume
         </button>
-        <button class="btn btn-stop" onclick={() => audio.stop()}>
+        <button class="btn btn-stop" onclick={handleStop}>
           <span class="btn-icon">■</span> Stop
         </button>
         <button class="btn btn-cancel" onclick={() => audio.cancel()}>
