@@ -2,12 +2,12 @@ pub mod audio;
 pub mod chat;
 pub mod export;
 pub mod generation;
+pub mod pipeline;
 pub mod providers;
 pub mod rag;
 pub mod recordings;
 pub mod settings;
 pub mod transcription;
-pub mod pipeline;
 
 use std::path::PathBuf;
 

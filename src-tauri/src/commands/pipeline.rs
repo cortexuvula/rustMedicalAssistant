@@ -63,8 +63,8 @@ pub async fn process_recording(
         app.clone(),
         state.clone(),
         recording_id.clone(),
-        None, // language — use default
-        Some(true), // diarize
+        None,       // language — use default
+        Some(true), // diarize — medical encounters are multi-speaker
     )
     .await;
 
