@@ -1,7 +1,3 @@
-use std::sync::Arc;
-
-use medical_db::settings::SettingsRepo;
-
 use crate::state::{self, AppState};
 
 /// Re-read API keys from storage and rebuild AI + STT provider registries.
@@ -19,19 +15,18 @@ pub async fn reinit_providers(
         *guard = ai_registry;
     }
 
-    // Read preferred STT provider from saved settings
-    let preferred_stt = {
+    // Rebuild local STT provider with current whisper model setting
+    let whisper_model = {
         let conn = state.db.conn().ok();
-        conn.and_then(|c| SettingsRepo::load_config(&c).ok())
-            .map(|cfg| cfg.stt_provider)
-            .unwrap_or_else(|| "deepgram".into())
+        conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
+            .map(|cfg| cfg.whisper_model)
+            .unwrap_or_else(|| "large-v3-turbo".into())
     };
 
-    // Rebuild STT failover chain with preferred provider first
-    let stt = state::init_stt_providers(&state.keys, &preferred_stt);
+    let stt = state::init_stt_providers(&state.data_dir, &whisper_model);
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt.map(Arc::new);
+        *guard = stt;
     }
 
     Ok(available)

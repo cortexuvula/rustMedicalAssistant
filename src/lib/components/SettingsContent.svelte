@@ -7,6 +7,9 @@
   import { listAudioDevices } from '../api/audio';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import type { AudioDevice } from '../types';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { onDestroy } from 'svelte';
+  import { listWhisperModels, downloadModel, deleteModel, type ModelInfo as WhisperModelInfo } from '../api/models';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -17,9 +20,6 @@
     { id: 'gemini', label: 'Gemini' },
     { id: 'groq', label: 'Groq' },
     { id: 'cerebras', label: 'Cerebras' },
-    { id: 'deepgram', label: 'Deepgram' },
-    { id: 'elevenlabs', label: 'ElevenLabs' },
-    { id: 'modulate', label: 'Modulate' },
   ];
 
   let storedKeys = $state<string[]>([]);
@@ -38,6 +38,12 @@
   let audioDevices = $state<AudioDevice[]>([]);
   let devicesLoading = $state(false);
 
+  let whisperModels = $state<WhisperModelInfo[]>([]);
+  let modelsRefreshing = $state(false);
+  let downloadingModel = $state<string | null>(null);
+  let downloadProgress = $state<Record<string, { downloaded: number; total: number }>>({});
+  let progressUnlisten: UnlistenFn | null = null;
+
   async function fetchAudioDevices() {
     devicesLoading = true;
     try {
@@ -48,6 +54,50 @@
     } finally {
       devicesLoading = false;
     }
+  }
+
+  async function fetchWhisperModels() {
+    modelsRefreshing = true;
+    try {
+      whisperModels = await listWhisperModels();
+    } catch (e) {
+      console.error('Failed to list whisper models:', e);
+    } finally {
+      modelsRefreshing = false;
+    }
+  }
+
+  async function handleDownloadModel(modelId: string) {
+    downloadingModel = modelId;
+    try {
+      await downloadModel(modelId);
+      await fetchWhisperModels();
+    } catch (e) {
+      console.error(`Failed to download model ${modelId}:`, e);
+    } finally {
+      downloadingModel = null;
+    }
+  }
+
+  async function handleDeleteModel(modelId: string) {
+    try {
+      await deleteModel(modelId);
+      await fetchWhisperModels();
+    } catch (e) {
+      console.error(`Failed to delete model ${modelId}:`, e);
+    }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
+    if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
+    return `${(bytes / 1073741824).toFixed(1)} GB`;
+  }
+
+  async function handleWhisperModelChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value;
+    await settings.updateField('whisper_model', value);
   }
 
   async function fetchModelsForProvider(provider: string) {
@@ -70,12 +120,31 @@
       listApiKeys(),
       fetchModelsForProvider($settings.ai_provider),
       fetchAudioDevices(),
+      fetchWhisperModels(),
     ]);
     if (keys.status === 'fulfilled') {
       storedKeys = keys.value;
     } else {
       console.error('Failed to list API keys:', keys.reason);
     }
+
+    // Listen for model download progress events
+    progressUnlisten = await listen<{ model_id: string; downloaded_bytes: number; total_bytes: number }>(
+      'model-download-progress',
+      (event) => {
+        downloadProgress = {
+          ...downloadProgress,
+          [event.payload.model_id]: {
+            downloaded: event.payload.downloaded_bytes,
+            total: event.payload.total_bytes,
+          },
+        };
+      }
+    );
+  });
+
+  onDestroy(() => {
+    progressUnlisten?.();
   });
 
   async function handleSaveApiKey(provider: string) {
@@ -164,11 +233,6 @@
   async function handleInputDeviceChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value;
     await settings.updateField('input_device', value || null);
-  }
-
-  async function handleSttProviderChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value;
-    await settings.updateField('stt_provider', value);
   }
 
   async function handleSampleRateChange(e: Event) {
@@ -385,7 +449,7 @@
             disabled={devicesLoading}
           >
             {#if devicesLoading}
-              <option value="">Loading devices…</option>
+              <option value="">Loading devices...</option>
             {:else}
               <option value="">System Default</option>
               {#each audioDevices as device}
@@ -398,18 +462,64 @@
         </div>
 
         <div class="form-group">
-          <label for="stt-provider" class="form-label">STT Provider</label>
+          <label for="whisper-model" class="form-label">Whisper Model</label>
           <select
-            id="stt-provider"
-            value={$settings.stt_provider}
-            onchange={handleSttProviderChange}
+            id="whisper-model"
+            value={$settings.whisper_model}
+            onchange={handleWhisperModelChange}
+            disabled={modelsRefreshing}
           >
-            <option value="deepgram">Deepgram</option>
-            <option value="groq">Groq Whisper</option>
-            <option value="elevenlabs">ElevenLabs</option>
-            <option value="modulate">Modulate</option>
-            <option value="whisper-local">Whisper (Local)</option>
+            {#each whisperModels as model}
+              <option value={model.id}>
+                {model.id} ({formatBytes(model.size_bytes)}) {model.downloaded ? '' : '- not downloaded'}
+              </option>
+            {/each}
           </select>
+          <span class="form-hint">Larger models are more accurate but use more memory and take longer.</span>
+        </div>
+
+        <div class="form-group">
+          <span class="form-label">Model Management</span>
+          <div class="model-list">
+            {#each whisperModels as model}
+              <div class="model-row">
+                <div class="model-info">
+                  <span class="model-name">{model.id}</span>
+                  <span class="model-desc">{model.description}</span>
+                  <span class="model-size">{formatBytes(model.size_bytes)}</span>
+                </div>
+                <div class="model-actions">
+                  {#if model.downloaded}
+                    <span class="badge-downloaded">Downloaded</span>
+                    <button
+                      class="btn-delete-model"
+                      onclick={() => handleDeleteModel(model.id)}
+                      disabled={model.id === $settings.whisper_model}
+                      title={model.id === $settings.whisper_model ? 'Cannot delete the active model' : 'Delete to free disk space'}
+                    >
+                      Delete
+                    </button>
+                  {:else if downloadingModel === model.id}
+                    <span class="download-progress">
+                      {#if downloadProgress[model.id]}
+                        {Math.round((downloadProgress[model.id].downloaded / (downloadProgress[model.id].total || 1)) * 100)}%
+                      {:else}
+                        Starting...
+                      {/if}
+                    </span>
+                  {:else}
+                    <button
+                      class="btn-download-model"
+                      onclick={() => handleDownloadModel(model.id)}
+                      disabled={downloadingModel !== null}
+                    >
+                      Download
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
         </div>
 
         <div class="form-group">
@@ -707,5 +817,108 @@
     justify-content: space-between;
     font-size: 11px;
     color: var(--text-muted);
+  }
+
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .model-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background-color: var(--bg-tertiary, #374151);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    gap: 12px;
+  }
+
+  .model-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .model-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .model-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .model-size {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .model-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .badge-downloaded {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--success);
+    background-color: color-mix(in srgb, var(--success) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+  }
+
+  .download-progress {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  .btn-download-model {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    background-color: var(--accent);
+    color: var(--text-inverse);
+    border-radius: var(--radius-sm);
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-download-model:hover:not(:disabled) {
+    background-color: var(--accent-hover);
+  }
+
+  .btn-download-model:disabled {
+    opacity: 0.5;
+  }
+
+  .btn-delete-model {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--danger, #ef4444);
+    background-color: transparent;
+    border: 1px solid var(--danger, #ef4444);
+    border-radius: var(--radius-sm);
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-delete-model:hover:not(:disabled) {
+    background-color: rgba(239, 68, 68, 0.1);
+  }
+
+  .btn-delete-model:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
   }
 </style>

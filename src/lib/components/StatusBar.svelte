@@ -22,7 +22,7 @@
   <div class="status-right">
     <span class="status-provider">AI: {$settings.ai_provider}/{$settings.ai_model}</span>
     <span class="status-sep">·</span>
-    <span class="status-provider">STT: {$settings.stt_provider}</span>
+    <span class="status-provider">STT: {$settings.whisper_model}</span>
   </div>
 </div>
 

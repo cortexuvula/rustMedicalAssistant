@@ -52,7 +52,7 @@ export interface AppConfig {
   storage_path: string | null;
   ai_provider: string;
   ai_model: string;
-  stt_provider: string;
+  whisper_model: string;
   tts_provider: string;
   tts_voice: string;
   temperature: number;

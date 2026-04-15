@@ -45,7 +45,7 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
 // 1. transcribe_recording
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Transcribe a previously recorded WAV file using the STT failover chain.
+/// Transcribe a previously recorded WAV file using the local STT provider.
 ///
 /// Emits `transcription-progress` events ("loading", "transcribing", "complete")
 /// so the frontend can display live status.  Returns the transcript text on success.
@@ -142,19 +142,14 @@ pub async fn transcribe_recording(
     // --- emit: transcribing ---
     let _ = app.emit("transcription-progress", "transcribing");
 
-    // Clone the Arc<SttFailover> so we release the mutex before the long-running transcribe await.
-    let stt = {
+    let stt: Arc<dyn medical_core::traits::SttProvider + Send + Sync> = {
         let guard = state.stt_providers.lock().await;
         match guard.as_ref() {
-            Some(stt) => {
-                let statuses = stt.provider_statuses();
-                tracing::info!(?statuses, "STT providers available");
-                stt.clone()
-            }
+            Some(stt) => stt.clone(),
             None => {
-                tracing::error!("No STT providers configured — cannot transcribe");
+                tracing::error!("No STT provider configured — cannot transcribe");
                 return Err(
-                    "No STT providers configured. Add a Deepgram, Groq, ElevenLabs, or Modulate API key in Settings → API Keys.".to_string()
+                    "No STT provider configured. Download a Whisper model in Settings → Audio / STT.".to_string()
                 );
             }
         }
@@ -215,42 +210,29 @@ fn format_transcript_with_speakers(transcript: &medical_core::types::stt::Transc
         return transcript.text.clone();
     }
 
-    // Map raw speaker IDs (speaker_0, speaker_1) to friendly labels (Speaker 1, Speaker 2).
-    let mut speaker_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut speaker_counter = 0u32;
-
-    for seg in &segments_with_speakers {
-        if let Some(ref id) = seg.speaker {
-            if !speaker_map.contains_key(id) {
-                speaker_counter += 1;
-                speaker_map.insert(id.clone(), format!("Speaker {speaker_counter}"));
-            }
-        }
-    }
-
-    // Group consecutive words by speaker into paragraphs.
+    // Group consecutive segments by speaker into paragraphs.
+    // Speaker labels arrive pre-formatted from the merge module ("Speaker 1", "Speaker 2").
     let mut result = String::new();
     let mut current_speaker: Option<&str> = None;
     let mut current_words: Vec<&str> = Vec::new();
 
     for seg in &segments_with_speakers {
-        let speaker_id = seg.speaker.as_deref().unwrap_or("unknown");
+        let label = seg.speaker.as_deref().unwrap_or("Unknown");
 
-        if current_speaker != Some(speaker_id) {
+        if current_speaker != Some(label) {
             // Flush the previous speaker's words.
             if !current_words.is_empty() {
-                if let Some(prev_id) = current_speaker {
-                    let label = speaker_map.get(prev_id).map(|s| s.as_str()).unwrap_or(prev_id);
+                if let Some(prev) = current_speaker {
                     if !result.is_empty() {
                         result.push_str("\n\n");
                     }
-                    result.push_str(label);
+                    result.push_str(prev);
                     result.push_str(": ");
                     result.push_str(&current_words.join(" "));
                 }
                 current_words.clear();
             }
-            current_speaker = Some(speaker_id);
+            current_speaker = Some(label);
         }
 
         current_words.push(seg.text.trim());
@@ -258,12 +240,11 @@ fn format_transcript_with_speakers(transcript: &medical_core::types::stt::Transc
 
     // Flush the last speaker's words.
     if !current_words.is_empty() {
-        if let Some(prev_id) = current_speaker {
-            let label = speaker_map.get(prev_id).map(|s| s.as_str()).unwrap_or(prev_id);
+        if let Some(prev) = current_speaker {
             if !result.is_empty() {
                 result.push_str("\n\n");
             }
-            result.push_str(label);
+            result.push_str(prev);
             result.push_str(": ");
             result.push_str(&current_words.join(" "));
         }
@@ -276,14 +257,13 @@ fn format_transcript_with_speakers(transcript: &medical_core::types::stt::Transc
 // 2. list_stt_providers
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Return the name and availability status of each configured STT provider.
 #[tauri::command]
 pub async fn list_stt_providers(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<(String, bool)>, String> {
     let guard = state.stt_providers.lock().await;
-    match guard.as_deref() {
-        Some(stt) => Ok(stt.provider_statuses()),
+    match guard.as_ref() {
+        Some(provider) => Ok(vec![(provider.name().to_string(), true)]),
         None => Ok(vec![]),
     }
 }

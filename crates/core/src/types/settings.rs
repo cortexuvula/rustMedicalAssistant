@@ -94,12 +94,8 @@ fn default_ai_model() -> String {
     "gpt-4o".into()
 }
 
-fn default_stt_provider() -> String {
-    "groq".into()
-}
-
-fn default_stt_failover_chain() -> Vec<String> {
-    vec!["groq".into(), "deepgram".into(), "whisper".into()]
+fn default_whisper_model() -> String {
+    "large-v3-turbo".into()
 }
 
 fn default_tts_provider() -> String {
@@ -206,10 +202,8 @@ pub struct AppConfig {
     pub ai_provider: String,
     #[serde(default = "default_ai_model")]
     pub ai_model: String,
-    #[serde(default = "default_stt_provider")]
-    pub stt_provider: String,
-    #[serde(default = "default_stt_failover_chain")]
-    pub stt_failover_chain: Vec<String>,
+    #[serde(default = "default_whisper_model")]
+    pub whisper_model: String,
     #[serde(default = "default_tts_provider")]
     pub tts_provider: String,
     #[serde(default = "default_tts_voice")]
@@ -299,7 +293,7 @@ mod tests {
         assert_eq!(config.channels, 1);
         assert_eq!(config.ai_provider, "openai");
         assert_eq!(config.ai_model, "gpt-4o");
-        assert_eq!(config.stt_provider, "groq");
+        assert_eq!(config.whisper_model, "large-v3-turbo");
         assert_eq!(config.tts_provider, "elevenlabs");
         assert_eq!(config.tts_voice, "default");
         assert!((config.temperature - 0.4).abs() < f32::EPSILON);
@@ -376,9 +370,4 @@ mod tests {
         assert_eq!(telehealth, SoapTemplate::Telehealth);
     }
 
-    #[test]
-    fn stt_failover_chain_default() {
-        let config = AppConfig::default();
-        assert_eq!(config.stt_failover_chain, vec!["groq", "deepgram", "whisper"]);
-    }
 }
