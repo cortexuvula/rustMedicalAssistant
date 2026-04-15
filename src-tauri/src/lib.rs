@@ -52,6 +52,7 @@ pub fn run() {
             commands::chat::list_models,
             commands::transcription::transcribe_recording,
             commands::transcription::list_stt_providers,
+            commands::pipeline::process_recording,
             commands::generation::generate_soap,
             commands::generation::generate_referral,
             commands::generation::generate_letter,
