@@ -158,6 +158,10 @@ fn default_auto_retry_failed() -> bool {
     true
 }
 
+fn default_auto_generate_soap() -> bool {
+    false
+}
+
 fn default_max_retry_attempts() -> u32 {
     3
 }
@@ -220,6 +224,8 @@ pub struct AppConfig {
     pub auto_generate_referral: bool,
     #[serde(default)]
     pub auto_generate_letter: bool,
+    #[serde(default = "default_auto_generate_soap")]
+    pub auto_generate_soap: bool,
     #[serde(default = "default_auto_index_rag")]
     pub auto_index_rag: bool,
     #[serde(default = "default_icd_version")]
@@ -299,6 +305,7 @@ mod tests {
         assert!((config.temperature - 0.4).abs() < f32::EPSILON);
         assert!(!config.auto_generate_referral);
         assert!(!config.auto_generate_letter);
+        assert!(!config.auto_generate_soap);
         assert!(config.auto_index_rag);
         assert_eq!(config.icd_version, IcdVersion::Icd9);
         assert_eq!(config.soap_template, SoapTemplate::FollowUp);
