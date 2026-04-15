@@ -4,6 +4,7 @@
   import { pipeline, type PipelineStage } from '../stores/pipeline';
   import { recordings } from '../stores/recordings';
   import { importAudioFile, getRecording } from '../api/recordings';
+  import { copyToClipboard } from '../utils/clipboard';
   import RecordingHeader from '../components/RecordingHeader.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
 
@@ -94,19 +95,20 @@
     }
   }
 
+  let copyStatus = $state<'idle' | 'copied'>('idle');
+
   async function handleCopySoap() {
-    // The SOAP text was persisted to the recording by the pipeline.
-    // Read it from the pipeline result isn't stored locally, so we
-    // load the recording and copy its soap_note.
     const rid = pipelineRecordingId;
     if (!rid) return;
     try {
       const rec = await getRecording(rid);
       if (rec?.soap_note) {
-        await navigator.clipboard.writeText(rec.soap_note);
+        await copyToClipboard(rec.soap_note);
+        copyStatus = 'copied';
+        setTimeout(() => { copyStatus = 'idle'; }, 2000);
       }
-    } catch (_) {
-      // Fallback: clipboard API may fail in some contexts
+    } catch (e) {
+      console.error('Failed to copy SOAP note:', e);
     }
   }
 </script>
@@ -177,7 +179,9 @@
 
         {#if $pipeline.current.stage === 'completed'}
           <div class="post-actions">
-            <button class="btn-primary" onclick={handleCopySoap}>Copy SOAP Note</button>
+            <button class="btn-primary" onclick={handleCopySoap}>
+              {copyStatus === 'copied' ? 'Copied!' : 'Copy SOAP Note'}
+            </button>
           </div>
         {/if}
 
