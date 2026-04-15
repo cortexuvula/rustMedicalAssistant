@@ -60,6 +60,9 @@ pub fn run() {
             commands::rag::ingest_document,
             commands::rag::search_rag,
             commands::rag::rag_stats,
+            commands::models::list_whisper_models,
+            commands::models::download_model,
+            commands::models::delete_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
