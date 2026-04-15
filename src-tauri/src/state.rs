@@ -28,11 +28,8 @@ use medical_rag::vector_store::VectorStore;
 
 use medical_security::key_storage::KeyStorage;
 
-use medical_stt_providers::deepgram::DeepgramProvider;
-use medical_stt_providers::elevenlabs_stt::ElevenLabsSttProvider;
-use medical_stt_providers::failover::SttFailover;
-use medical_stt_providers::groq_whisper::GroqWhisperProvider;
-use medical_stt_providers::modulate::ModulateProvider;
+use medical_stt_providers::LocalSttProvider;
+use medical_stt_providers::models as stt_models;
 
 use medical_core::traits::SttProvider;
 
@@ -66,7 +63,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     pub recording_active: Arc<Mutex<bool>>,
     pub ai_providers: Arc<Mutex<ProviderRegistry>>,
-    pub stt_providers: Arc<Mutex<Option<Arc<SttFailover>>>>,
+    pub stt_providers: Arc<Mutex<Option<Arc<dyn SttProvider + Send + Sync>>>>,
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
     pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
@@ -124,91 +121,24 @@ pub fn init_ai_providers(keys: &KeyStorage) -> ProviderRegistry {
     registry
 }
 
-/// Read saved API keys and build an STT failover chain from available providers.
-///
-/// The `preferred` provider name is placed first in the chain so the user's
-/// selection is always tried before falling back to alternatives.
-///
-/// Returns `None` if no STT provider keys are configured.
-pub fn init_stt_providers(keys: &KeyStorage, preferred: &str) -> Option<SttFailover> {
-    let mut providers: Vec<(String, Arc<dyn SttProvider>)> = Vec::new();
+/// Create the local STT provider with model paths from the app data directory.
+pub fn init_stt_providers(data_dir: &std::path::Path, whisper_model_id: &str) -> Option<Arc<dyn SttProvider + Send + Sync>> {
+    let whisper_filename = stt_models::whisper_model_filename(whisper_model_id)
+        .unwrap_or("ggml-large-v3-turbo.bin");
 
-    // Deepgram
-    if let Ok(Some(key)) = keys.get_key("deepgram") {
-        match DeepgramProvider::new(&key) {
-            Ok(provider) => {
-                info!("Adding Deepgram to STT failover chain");
-                providers.push(("deepgram".into(), Arc::new(provider)));
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create Deepgram STT provider: {e}");
-            }
-        }
-    }
+    let whisper_path = stt_models::whisper_model_path(data_dir, whisper_filename);
+    let seg_path = stt_models::pyannote_model_path(data_dir, "segmentation-3.0.onnx");
+    let emb_path = stt_models::pyannote_model_path(data_dir, "wespeaker_en_voxceleb_CAM++.onnx");
 
-    // Groq Whisper
-    if let Ok(Some(key)) = keys.get_key("groq") {
-        match GroqWhisperProvider::new(&key) {
-            Ok(provider) => {
-                info!("Adding Groq Whisper to STT failover chain");
-                providers.push(("groq".into(), Arc::new(provider)));
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create Groq Whisper STT provider: {e}");
-            }
-        }
-    }
+    info!(
+        whisper = %whisper_path.display(),
+        segmentation = %seg_path.display(),
+        embedding = %emb_path.display(),
+        "Initializing local STT provider"
+    );
 
-    // ElevenLabs
-    if let Ok(Some(key)) = keys.get_key("elevenlabs") {
-        match ElevenLabsSttProvider::new(&key) {
-            Ok(provider) => {
-                info!("Adding ElevenLabs to STT failover chain");
-                providers.push(("elevenlabs".into(), Arc::new(provider)));
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create ElevenLabs STT provider: {e}");
-            }
-        }
-    }
-
-    // Modulate
-    if let Ok(Some(key)) = keys.get_key("modulate") {
-        match ModulateProvider::new(&key) {
-            Ok(provider) => {
-                info!("Adding Modulate to STT failover chain");
-                providers.push(("modulate".into(), Arc::new(provider)));
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create Modulate STT provider: {e}");
-            }
-        }
-    }
-
-    if providers.is_empty() {
-        info!("No STT providers configured");
-        return None;
-    }
-
-    // Reorder: move the preferred provider to the front of the chain.
-    let preferred_lower = preferred.to_lowercase();
-    let preferred_idx = providers.iter().position(|(name, _)| name == &preferred_lower);
-    if let Some(idx) = preferred_idx {
-        let entry = providers.remove(idx);
-        providers.insert(0, entry);
-        info!(preferred = %preferred_lower, "STT preferred provider moved to front");
-    } else {
-        tracing::warn!(
-            preferred = %preferred_lower,
-            "Preferred STT provider '{}' not available — using default order",
-            preferred_lower
-        );
-    }
-
-    let chain: Vec<Arc<dyn SttProvider>> = providers.into_iter().map(|(_, p)| p).collect();
-    let names: Vec<&str> = chain.iter().map(|p| p.name()).collect();
-    info!(?names, "STT failover chain order");
-    Some(SttFailover::new(chain))
+    let provider = LocalSttProvider::new(whisper_path, seg_path, emb_path);
+    Some(Arc::new(provider))
 }
 
 impl AppState {
@@ -234,10 +164,10 @@ impl AppState {
             conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
         };
 
-        let preferred_stt = config.as_ref()
-            .map(|c| c.stt_provider.as_str())
-            .unwrap_or("deepgram");
-        let stt_providers = init_stt_providers(&keys, preferred_stt);
+        let whisper_model = config.as_ref()
+            .map(|c| c.whisper_model.as_str())
+            .unwrap_or("large-v3-turbo");
+        let stt_providers = init_stt_providers(&data_dir, whisper_model);
 
         // Set the active AI provider from saved settings
         if let Some(ref cfg) = config {
@@ -284,7 +214,7 @@ impl AppState {
             data_dir,
             recording_active: Arc::new(Mutex::new(false)),
             ai_providers: Arc::new(Mutex::new(ai_providers)),
-            stt_providers: Arc::new(Mutex::new(stt_providers.map(Arc::new))),
+            stt_providers: Arc::new(Mutex::new(stt_providers)),
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
             current_recording: Arc::new(std::sync::Mutex::new(None)),

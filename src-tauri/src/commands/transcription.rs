@@ -142,19 +142,14 @@ pub async fn transcribe_recording(
     // --- emit: transcribing ---
     let _ = app.emit("transcription-progress", "transcribing");
 
-    // Clone the Arc<SttFailover> so we release the mutex before the long-running transcribe await.
-    let stt = {
+    let stt: Arc<dyn medical_core::traits::SttProvider + Send + Sync> = {
         let guard = state.stt_providers.lock().await;
         match guard.as_ref() {
-            Some(stt) => {
-                let statuses = stt.provider_statuses();
-                tracing::info!(?statuses, "STT providers available");
-                stt.clone()
-            }
+            Some(stt) => stt.clone(),
             None => {
-                tracing::error!("No STT providers configured — cannot transcribe");
+                tracing::error!("No STT provider configured — cannot transcribe");
                 return Err(
-                    "No STT providers configured. Add a Deepgram, Groq, ElevenLabs, or Modulate API key in Settings → API Keys.".to_string()
+                    "No STT provider configured. Download a Whisper model in Settings → Audio / STT.".to_string()
                 );
             }
         }
@@ -276,14 +271,13 @@ fn format_transcript_with_speakers(transcript: &medical_core::types::stt::Transc
 // 2. list_stt_providers
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// Return the name and availability status of each configured STT provider.
 #[tauri::command]
 pub async fn list_stt_providers(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<(String, bool)>, String> {
     let guard = state.stt_providers.lock().await;
-    match guard.as_deref() {
-        Some(stt) => Ok(stt.provider_statuses()),
+    match guard.as_ref() {
+        Some(provider) => Ok(vec![(provider.name().to_string(), true)]),
         None => Ok(vec![]),
     }
 }
