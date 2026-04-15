@@ -6,6 +6,7 @@ pub mod elevenlabs_stt;
 pub mod modulate;
 pub mod whisper_local;
 pub mod merge;
+pub mod models;
 
 use thiserror::Error;
 
@@ -21,6 +22,10 @@ pub enum SttError {
     Http(String),
     #[error("Audio format error: {0}")]
     AudioFormat(String),
+    #[error("Model download error: {0}")]
+    ModelDownload(String),
+    #[error("Model not found: {0}")]
+    ModelNotFound(String),
 }
 
 pub type SttResult<T> = Result<T, SttError>;
