@@ -127,22 +127,20 @@
     } else {
       console.error('Failed to list API keys:', keys.reason);
     }
-  });
 
-  // Listen for model download progress events
-  listen<{ model_id: string; downloaded_bytes: number; total_bytes: number }>(
-    'model-download-progress',
-    (event) => {
-      downloadProgress = {
-        ...downloadProgress,
-        [event.payload.model_id]: {
-          downloaded: event.payload.downloaded_bytes,
-          total: event.payload.total_bytes,
-        },
-      };
-    }
-  ).then((unlisten) => {
-    progressUnlisten = unlisten;
+    // Listen for model download progress events
+    progressUnlisten = await listen<{ model_id: string; downloaded_bytes: number; total_bytes: number }>(
+      'model-download-progress',
+      (event) => {
+        downloadProgress = {
+          ...downloadProgress,
+          [event.payload.model_id]: {
+            downloaded: event.payload.downloaded_bytes,
+            total: event.payload.total_bytes,
+          },
+        };
+      }
+    );
   });
 
   onDestroy(() => {
