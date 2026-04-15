@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use medical_db::settings::SettingsRepo;
+
 use crate::state::{self, AppState};
 
 /// Re-read API keys from storage and rebuild AI + STT provider registries.
@@ -15,11 +19,19 @@ pub async fn reinit_providers(
         *guard = ai_registry;
     }
 
-    // Rebuild STT failover chain
-    let stt = state::init_stt_providers(&state.keys);
+    // Read preferred STT provider from saved settings
+    let preferred_stt = {
+        let conn = state.db.conn().ok();
+        conn.and_then(|c| SettingsRepo::load_config(&c).ok())
+            .map(|cfg| cfg.stt_provider)
+            .unwrap_or_else(|| "deepgram".into())
+    };
+
+    // Rebuild STT failover chain with preferred provider first
+    let stt = state::init_stt_providers(&state.keys, &preferred_stt);
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt.map(std::sync::Arc::new);
+        *guard = stt.map(Arc::new);
     }
 
     Ok(available)

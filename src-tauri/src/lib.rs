@@ -2,9 +2,20 @@ mod state;
 mod commands;
 
 use state::AppState;
+use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize tracing so all log output (info!, warn!, error!) is visible.
+    // Controlled via RUST_LOG env var; defaults to info-level for our crates.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("rust_medical_assistant=debug,medical_stt_providers=debug,medical_ai_providers=info,medical_audio=info,info")
+            }),
+        )
+        .init();
+
     let app_state = AppState::initialize()
         .expect("Failed to initialize application state");
 

@@ -105,6 +105,32 @@ pub async fn transcribe_recording(
         .await
         .map_err(|e| format!("Task join error: {e}"))??;
 
+    // Compute audio signal stats to detect silent/corrupt recordings.
+    let (peak, rms) = if audio.samples.is_empty() {
+        (0.0f32, 0.0f32)
+    } else {
+        let peak = audio.samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        let sum_sq: f64 = audio.samples.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+        let rms = (sum_sq / audio.samples.len() as f64).sqrt() as f32;
+        (peak, rms)
+    };
+
+    tracing::info!(
+        samples = audio.samples.len(),
+        sample_rate = audio.sample_rate,
+        channels = audio.channels,
+        duration_secs = %format!("{:.1}", audio.duration_seconds()),
+        peak_amplitude = %format!("{:.6}", peak),
+        rms_level = %format!("{:.6}", rms),
+        "Loaded WAV audio data"
+    );
+
+    if audio.samples.is_empty() {
+        let err_msg = format!("WAV file contains no audio samples: {}", wav_path.display());
+        tracing::error!("{err_msg}");
+        return Err(err_msg);
+    }
+
     // Build STT config from caller parameters.
     // Default diarize to true — medical recordings are typically conversations.
     let config = SttConfig {
@@ -119,14 +145,33 @@ pub async fn transcribe_recording(
     // Clone the Arc<SttFailover> so we release the mutex before the long-running transcribe await.
     let stt = {
         let guard = state.stt_providers.lock().await;
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "No STT providers configured. Add an API key in Settings.".to_string())?
+        match guard.as_ref() {
+            Some(stt) => {
+                let statuses = stt.provider_statuses();
+                tracing::info!(?statuses, "STT providers available");
+                stt.clone()
+            }
+            None => {
+                tracing::error!("No STT providers configured — cannot transcribe");
+                return Err(
+                    "No STT providers configured. Add a Deepgram, Groq, ElevenLabs, or Modulate API key in Settings → API Keys.".to_string()
+                );
+            }
+        }
     };
     let transcript = stt.transcribe(audio, config)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "STT transcription failed");
+            format!("Transcription failed: {e}")
+        })?;
+
+    tracing::info!(
+        provider = %transcript.provider,
+        text_len = transcript.text.len(),
+        segments = transcript.segments.len(),
+        "Transcription complete"
+    );
 
     // Build speaker-attributed text when diarization segments are available.
     let display_text = format_transcript_with_speakers(&transcript);

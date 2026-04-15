@@ -15,15 +15,16 @@ use medical_core::types::{AudioData, AudioStream, SttConfig, Transcript, Transcr
 
 // ── WAV encoding ─────────────────────────────────────────────────────────────
 
-/// Encode `AudioData` (f32 PCM) into an in-memory WAV file.
+/// Encode `AudioData` (f32 PCM) into an in-memory 16-bit PCM WAV file.
 ///
+/// Uses 16-bit signed integer format for maximum STT provider compatibility.
 /// The output is written with [`hound`] and can be shared across providers.
 pub fn encode_audio_to_wav(audio: &AudioData) -> AppResult<Vec<u8>> {
     let spec = hound::WavSpec {
         channels: audio.channels,
         sample_rate: audio.sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
     };
 
     let mut cursor = Cursor::new(Vec::new());
@@ -33,8 +34,11 @@ pub fn encode_audio_to_wav(audio: &AudioData) -> AppResult<Vec<u8>> {
             .map_err(|e| AppError::SttProvider(format!("WAV init: {e}")))?;
 
         for &s in &audio.samples {
+            // Clamp f32 [-1.0, 1.0] → i16 range and write as 16-bit PCM.
+            let clamped = s.clamp(-1.0, 1.0);
+            let sample_i16 = (clamped * i16::MAX as f32) as i16;
             writer
-                .write_sample(s)
+                .write_sample(sample_i16)
                 .map_err(|e| AppError::SttProvider(format!("WAV write: {e}")))?;
         }
 
@@ -152,17 +156,22 @@ impl SttProvider for DeepgramProvider {
             .await
             .map_err(|e| AppError::SttProvider(format!("Deepgram request: {e}")))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
             return Err(AppError::SttProvider(format!(
-                "Deepgram HTTP {status}: {body}"
+                "Deepgram HTTP {status}: {body_text}"
             )));
         }
 
-        let dg: DeepgramResponse = response
-            .json()
-            .await
+        tracing::debug!(
+            response_len = body_text.len(),
+            response_body = %body_text,
+            "Deepgram raw response"
+        );
+
+        let dg: DeepgramResponse = serde_json::from_str(&body_text)
             .map_err(|e| AppError::SttProvider(format!("Deepgram JSON: {e}")))?;
 
         // Extract text and word-level segments.

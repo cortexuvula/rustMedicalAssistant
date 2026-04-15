@@ -10,6 +10,7 @@ use medical_ai_providers::gemini::GeminiProvider;
 use medical_ai_providers::groq::GroqProvider;
 use medical_ai_providers::cerebras::CerebrasProvider;
 use medical_ai_providers::ollama::OllamaProvider;
+use medical_ai_providers::lmstudio::LmStudioProvider;
 use medical_ai_providers::ProviderRegistry;
 
 use medical_agents::orchestrator::AgentOrchestrator;
@@ -115,22 +116,29 @@ pub fn init_ai_providers(keys: &KeyStorage) -> ProviderRegistry {
     info!("Registering Ollama provider (local)");
     registry.register(Arc::new(OllamaProvider::new(None)));
 
+    // LM Studio — always available (local, no key needed)
+    info!("Registering LM Studio provider (local)");
+    registry.register(Arc::new(LmStudioProvider::new(None)));
+
     info!("AI providers available: {:?}", registry.list_available());
     registry
 }
 
 /// Read saved API keys and build an STT failover chain from available providers.
 ///
+/// The `preferred` provider name is placed first in the chain so the user's
+/// selection is always tried before falling back to alternatives.
+///
 /// Returns `None` if no STT provider keys are configured.
-pub fn init_stt_providers(keys: &KeyStorage) -> Option<SttFailover> {
-    let mut chain: Vec<Arc<dyn SttProvider>> = Vec::new();
+pub fn init_stt_providers(keys: &KeyStorage, preferred: &str) -> Option<SttFailover> {
+    let mut providers: Vec<(String, Arc<dyn SttProvider>)> = Vec::new();
 
-    // Deepgram — preferred for medical transcription
+    // Deepgram
     if let Ok(Some(key)) = keys.get_key("deepgram") {
         match DeepgramProvider::new(&key) {
             Ok(provider) => {
                 info!("Adding Deepgram to STT failover chain");
-                chain.push(Arc::new(provider));
+                providers.push(("deepgram".into(), Arc::new(provider)));
             }
             Err(e) => {
                 tracing::warn!("Failed to create Deepgram STT provider: {e}");
@@ -143,7 +151,7 @@ pub fn init_stt_providers(keys: &KeyStorage) -> Option<SttFailover> {
         match GroqWhisperProvider::new(&key) {
             Ok(provider) => {
                 info!("Adding Groq Whisper to STT failover chain");
-                chain.push(Arc::new(provider));
+                providers.push(("groq".into(), Arc::new(provider)));
             }
             Err(e) => {
                 tracing::warn!("Failed to create Groq Whisper STT provider: {e}");
@@ -156,7 +164,7 @@ pub fn init_stt_providers(keys: &KeyStorage) -> Option<SttFailover> {
         match ElevenLabsSttProvider::new(&key) {
             Ok(provider) => {
                 info!("Adding ElevenLabs to STT failover chain");
-                chain.push(Arc::new(provider));
+                providers.push(("elevenlabs".into(), Arc::new(provider)));
             }
             Err(e) => {
                 tracing::warn!("Failed to create ElevenLabs STT provider: {e}");
@@ -169,7 +177,7 @@ pub fn init_stt_providers(keys: &KeyStorage) -> Option<SttFailover> {
         match ModulateProvider::new(&key) {
             Ok(provider) => {
                 info!("Adding Modulate to STT failover chain");
-                chain.push(Arc::new(provider));
+                providers.push(("modulate".into(), Arc::new(provider)));
             }
             Err(e) => {
                 tracing::warn!("Failed to create Modulate STT provider: {e}");
@@ -177,13 +185,30 @@ pub fn init_stt_providers(keys: &KeyStorage) -> Option<SttFailover> {
         }
     }
 
-    if chain.is_empty() {
+    if providers.is_empty() {
         info!("No STT providers configured");
-        None
-    } else {
-        info!("STT failover chain has {} provider(s)", chain.len());
-        Some(SttFailover::new(chain))
+        return None;
     }
+
+    // Reorder: move the preferred provider to the front of the chain.
+    let preferred_lower = preferred.to_lowercase();
+    let preferred_idx = providers.iter().position(|(name, _)| name == &preferred_lower);
+    if let Some(idx) = preferred_idx {
+        let entry = providers.remove(idx);
+        providers.insert(0, entry);
+        info!(preferred = %preferred_lower, "STT preferred provider moved to front");
+    } else {
+        tracing::warn!(
+            preferred = %preferred_lower,
+            "Preferred STT provider '{}' not available — using default order",
+            preferred_lower
+        );
+    }
+
+    let chain: Vec<Arc<dyn SttProvider>> = providers.into_iter().map(|(_, p)| p).collect();
+    let names: Vec<&str> = chain.iter().map(|p| p.name()).collect();
+    info!(?names, "STT failover chain order");
+    Some(SttFailover::new(chain))
 }
 
 impl AppState {
@@ -202,17 +227,22 @@ impl AppState {
 
         // Initialize provider registries from saved API keys
         let mut ai_providers = init_ai_providers(&keys);
-        let stt_providers = init_stt_providers(&keys);
+
+        // Load saved settings to configure preferred providers
+        let config = {
+            let conn = db.conn().ok();
+            conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
+        };
+
+        let preferred_stt = config.as_ref()
+            .map(|c| c.stt_provider.as_str())
+            .unwrap_or("deepgram");
+        let stt_providers = init_stt_providers(&keys, preferred_stt);
 
         // Set the active AI provider from saved settings
-        {
-            let conn = db.conn().ok();
-            if let Some(c) = conn {
-                if let Ok(cfg) = medical_db::settings::SettingsRepo::load_config(&c) {
-                    if ai_providers.set_active(&cfg.ai_provider) {
-                        info!("Active AI provider set to '{}' from settings", cfg.ai_provider);
-                    }
-                }
+        if let Some(ref cfg) = config {
+            if ai_providers.set_active(&cfg.ai_provider) {
+                info!("Active AI provider set to '{}' from settings", cfg.ai_provider);
             }
         }
 

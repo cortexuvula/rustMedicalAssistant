@@ -316,27 +316,38 @@
             <option value="groq">Groq</option>
             <option value="cerebras">Cerebras</option>
             <option value="ollama">Ollama</option>
+            <option value="lmstudio">LM Studio</option>
           </select>
         </div>
 
         <div class="form-group">
           <label for="ai-model" class="form-label">Model</label>
-          <select
-            id="ai-model"
-            value={$settings.ai_model}
-            onchange={handleAiModelChange}
-            disabled={modelsLoading}
-          >
-            {#if modelsLoading}
-              <option value="">Loading models…</option>
-            {:else if availableModels.length === 0}
-              <option value="">No models available</option>
-            {:else}
-              {#each availableModels as model}
-                <option value={model.id}>{model.name}</option>
-              {/each}
-            {/if}
-          </select>
+          <div class="model-select-row">
+            <select
+              id="ai-model"
+              value={$settings.ai_model}
+              onchange={handleAiModelChange}
+              disabled={modelsLoading}
+            >
+              {#if modelsLoading}
+                <option value="">Loading models…</option>
+              {:else if availableModels.length === 0}
+                <option value="">No models available</option>
+              {:else}
+                {#each availableModels as model}
+                  <option value={model.id}>{model.name}</option>
+                {/each}
+              {/if}
+            </select>
+            <button
+              class="btn-refresh"
+              onclick={() => fetchModelsForProvider($settings.ai_provider)}
+              disabled={modelsLoading}
+              title="Refresh model list"
+            >
+              {modelsLoading ? '…' : '↻'}
+            </button>
+          </div>
         </div>
 
         <div class="form-group">
@@ -562,6 +573,42 @@
   .btn-reset:hover {
     background-color: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  .model-select-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .model-select-row select {
+    flex: 1;
+  }
+
+  .btn-refresh {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    color: var(--text-secondary);
+    background-color: var(--bg-tertiary, #374151);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .btn-refresh:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .btn-refresh:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .api-key-row {

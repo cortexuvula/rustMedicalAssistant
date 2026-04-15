@@ -83,15 +83,13 @@ impl SttFailover {
     }
 
     /// Try each provider in order, skipping those whose circuit is open.
-    /// Returns the first successful transcript, or the last encountered error.
+    /// Returns the first successful transcript, or a combined error from all providers.
     pub async fn transcribe(
         &self,
         audio: AudioData,
         config: SttConfig,
     ) -> AppResult<Transcript> {
-        let mut last_err = medical_core::error::AppError::SttProvider(
-            "All providers exhausted".to_owned(),
-        );
+        let mut errors: Vec<(String, String)> = Vec::new();
 
         for provider in &self.chain {
             let name = provider.name().to_owned();
@@ -107,10 +105,21 @@ impl SttFailover {
 
             if !available {
                 tracing::debug!(provider = %name, "skipping — circuit open");
+                errors.push((name, "circuit breaker open (too many recent failures)".into()));
                 continue;
             }
 
             match provider.transcribe(audio.clone(), config.clone()).await {
+                Ok(transcript) if transcript.text.trim().is_empty() => {
+                    // Provider returned success but with no transcript text.
+                    // Treat as a soft failure and try the next provider.
+                    tracing::warn!(
+                        provider = %name,
+                        "provider returned empty transcript — trying next"
+                    );
+                    errors.push((name, "returned empty transcript".into()));
+                    continue;
+                }
                 Ok(transcript) => {
                     let mut guard = self.health.lock().unwrap();
                     if let Some(h) = guard.get_mut(&name) {
@@ -124,12 +133,20 @@ impl SttFailover {
                     if let Some(h) = guard.get_mut(&name) {
                         h.record_failure();
                     }
-                    last_err = e;
+                    errors.push((name, e.to_string()));
                 }
             }
         }
 
-        Err(last_err)
+        // Build a combined error message showing why each provider failed.
+        let detail = errors
+            .iter()
+            .map(|(name, err)| format!("  {name}: {err}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(medical_core::error::AppError::SttProvider(format!(
+            "All STT providers failed:\n{detail}"
+        )))
     }
 
     /// Returns a snapshot of `(provider_name, is_available)` for each provider in the chain.

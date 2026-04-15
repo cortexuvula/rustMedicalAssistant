@@ -7,6 +7,7 @@ pub mod gemini;
 pub mod groq;
 pub mod cerebras;
 pub mod ollama;
+pub mod lmstudio;
 
 use std::collections::HashMap;
 use std::sync::Arc;

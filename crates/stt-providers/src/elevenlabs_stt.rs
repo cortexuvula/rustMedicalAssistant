@@ -112,17 +112,22 @@ impl SttProvider for ElevenLabsSttProvider {
             .await
             .map_err(|e| AppError::SttProvider(format!("ElevenLabs request: {e}")))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
             return Err(AppError::SttProvider(format!(
-                "ElevenLabs HTTP {status}: {body}"
+                "ElevenLabs HTTP {status}: {body_text}"
             )));
         }
 
-        let el: ElevenLabsResponse = response
-            .json()
-            .await
+        tracing::debug!(
+            response_len = body_text.len(),
+            response_preview = %&body_text[..body_text.len().min(500)],
+            "ElevenLabs raw response"
+        );
+
+        let el: ElevenLabsResponse = serde_json::from_str(&body_text)
             .map_err(|e| AppError::SttProvider(format!("ElevenLabs JSON: {e}")))?;
 
         let text = el.text.unwrap_or_default();
