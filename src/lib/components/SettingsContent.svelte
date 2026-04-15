@@ -424,6 +424,21 @@
             <option value={48000}>48000 Hz</option>
           </select>
         </div>
+
+        <div class="form-group">
+          <label class="form-label checkbox-label">
+            <input
+              type="checkbox"
+              checked={$settings.auto_generate_soap}
+              onchange={(e: Event) => {
+                const checked = (e.target as HTMLInputElement).checked;
+                settings.updateField('auto_generate_soap', checked);
+              }}
+            />
+            <span>Auto-generate SOAP after recording</span>
+          </label>
+          <span class="form-hint">When enabled, transcription and SOAP generation start automatically after you stop recording.</span>
+        </div>
       </section>
     {/if}
   </div>

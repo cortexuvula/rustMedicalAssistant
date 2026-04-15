@@ -14,6 +14,7 @@ const defaults: AppConfig = {
   sample_rate: 44100,
   autosave_enabled: true,
   autosave_interval_secs: 60,
+  auto_generate_soap: false,
   search_top_k: 5,
   mmr_lambda: 0.7,
 };

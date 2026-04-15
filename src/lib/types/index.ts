@@ -59,6 +59,7 @@ export interface AppConfig {
   sample_rate: number;
   autosave_enabled: boolean;
   autosave_interval_secs: number;
+  auto_generate_soap: boolean;
   search_top_k: number;
   mmr_lambda: number;
   [key: string]: any;
