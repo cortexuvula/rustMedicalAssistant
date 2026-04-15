@@ -16,6 +16,10 @@ reqwest = { workspace = true }
 tokio-stream = "0.1"
 # Local STT
 whisper-rs = { version = "0.16", features = ["metal"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["ndarray", "download-binaries", "std", "tls-native"] }
+ndarray = "0.17"
+knf-rs = "0.3.2"
+eyre = "0.6.12"
 # pyannote-rs has a broken ndarray version conflict (0.16 vs 0.17) in v0.3.4.
 # Diarization module is stubbed out until a working crate is available.
 # Candidates: speakrs (best quality), native-pyannote-rs, or patched pyannote-rs.

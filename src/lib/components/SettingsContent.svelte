@@ -9,7 +9,7 @@
   import type { AudioDevice } from '../types';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onDestroy } from 'svelte';
-  import { listWhisperModels, downloadModel, deleteModel, type ModelInfo as WhisperModelInfo } from '../api/models';
+  import { listWhisperModels, listPyannoteModels, downloadModel, deleteModel, type ModelInfo as WhisperModelInfo } from '../api/models';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -39,6 +39,7 @@
   let devicesLoading = $state(false);
 
   let whisperModels = $state<WhisperModelInfo[]>([]);
+  let pyannoteModels = $state<WhisperModelInfo[]>([]);
   let modelsRefreshing = $state(false);
   let downloadingModel = $state<string | null>(null);
   let downloadProgress = $state<Record<string, { downloaded: number; total: number }>>({});
@@ -67,11 +68,19 @@
     }
   }
 
+  async function fetchPyannoteModels() {
+    try {
+      pyannoteModels = await listPyannoteModels();
+    } catch (e) {
+      console.error('Failed to list pyannote models:', e);
+    }
+  }
+
   async function handleDownloadModel(modelId: string) {
     downloadingModel = modelId;
     try {
       await downloadModel(modelId);
-      await fetchWhisperModels();
+      await Promise.all([fetchWhisperModels(), fetchPyannoteModels()]);
     } catch (e) {
       console.error(`Failed to download model ${modelId}:`, e);
     } finally {
@@ -82,7 +91,7 @@
   async function handleDeleteModel(modelId: string) {
     try {
       await deleteModel(modelId);
-      await fetchWhisperModels();
+      await Promise.all([fetchWhisperModels(), fetchPyannoteModels()]);
     } catch (e) {
       console.error(`Failed to delete model ${modelId}:`, e);
     }
@@ -121,6 +130,7 @@
       fetchModelsForProvider($settings.ai_provider),
       fetchAudioDevices(),
       fetchWhisperModels(),
+      fetchPyannoteModels(),
     ]);
     if (keys.status === 'fulfilled') {
       storedKeys = keys.value;
@@ -496,6 +506,49 @@
                       onclick={() => handleDeleteModel(model.id)}
                       disabled={model.id === $settings.whisper_model}
                       title={model.id === $settings.whisper_model ? 'Cannot delete the active model' : 'Delete to free disk space'}
+                    >
+                      Delete
+                    </button>
+                  {:else if downloadingModel === model.id}
+                    <span class="download-progress">
+                      {#if downloadProgress[model.id]}
+                        {Math.round((downloadProgress[model.id].downloaded / (downloadProgress[model.id].total || 1)) * 100)}%
+                      {:else}
+                        Starting...
+                      {/if}
+                    </span>
+                  {:else}
+                    <button
+                      class="btn-download-model"
+                      onclick={() => handleDownloadModel(model.id)}
+                      disabled={downloadingModel !== null}
+                    >
+                      Download
+                    </button>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div class="form-group">
+          <span class="form-label">Diarization Models (Speaker Identification)</span>
+          <span class="form-hint">Both models are required for speaker diarization. Without them, transcripts will not have speaker labels.</span>
+          <div class="model-list">
+            {#each pyannoteModels as model}
+              <div class="model-row">
+                <div class="model-info">
+                  <span class="model-name">{model.id}</span>
+                  <span class="model-desc">{model.description}</span>
+                  <span class="model-size">{formatBytes(model.size_bytes)}</span>
+                </div>
+                <div class="model-actions">
+                  {#if model.downloaded}
+                    <span class="badge-downloaded">Downloaded</span>
+                    <button
+                      class="btn-delete-model"
+                      onclick={() => handleDeleteModel(model.id)}
                     >
                       Delete
                     </button>

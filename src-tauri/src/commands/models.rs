@@ -22,7 +22,15 @@ pub async fn list_whisper_models(
     Ok(stt_models::available_whisper_models(&state.data_dir))
 }
 
-/// Download a model by ID.
+/// List all available pyannote diarization models with download status.
+#[tauri::command]
+pub async fn list_pyannote_models(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<stt_models::ModelInfo>, String> {
+    Ok(stt_models::available_pyannote_models(&state.data_dir))
+}
+
+/// Download a model by ID (whisper or pyannote).
 ///
 /// Emits `model-download-progress` events with `{ model_id, downloaded_bytes, total_bytes }`.
 #[tauri::command]
@@ -33,17 +41,19 @@ pub async fn download_model(
 ) -> Result<(), String> {
     let data_dir = state.data_dir.clone();
 
-    // Find the model info from available whisper models
-    let all_models = stt_models::available_whisper_models(&data_dir);
+    // Search both whisper and pyannote model lists
+    let all_whisper = stt_models::available_whisper_models(&data_dir);
+    let all_pyannote = stt_models::available_pyannote_models(&data_dir);
 
-    let model = all_models
-        .iter()
-        .find(|m| m.id == model_id)
-        .ok_or_else(|| format!("Unknown model ID: {model_id}"))?
-        .clone();
-
-    // Determine destination path
-    let dest_path = stt_models::whisper_model_path(&data_dir, &model.filename);
+    let (model, dest_path) = if let Some(m) = all_whisper.iter().find(|m| m.id == model_id) {
+        let path = stt_models::whisper_model_path(&data_dir, &m.filename);
+        (m.clone(), path)
+    } else if let Some(m) = all_pyannote.iter().find(|m| m.id == model_id) {
+        let path = stt_models::pyannote_model_path(&data_dir, &m.filename);
+        (m.clone(), path)
+    } else {
+        return Err(format!("Unknown model ID: {model_id}"));
+    };
 
     if dest_path.exists() {
         return Ok(()); // Already downloaded
@@ -65,7 +75,7 @@ pub async fn download_model(
     .await
     .map_err(|e| e.to_string())?;
 
-    // After downloading a whisper model, reinitialize the STT provider so it picks up the new model
+    // After downloading, reinitialize the STT provider so it picks up new models
     let whisper_model = {
         let conn = state.db.conn().ok();
         conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
@@ -89,14 +99,17 @@ pub async fn delete_model(
 ) -> Result<(), String> {
     let data_dir = state.data_dir.clone();
 
-    let all_models = stt_models::available_whisper_models(&data_dir);
+    // Search both whisper and pyannote model lists
+    let all_whisper = stt_models::available_whisper_models(&data_dir);
+    let all_pyannote = stt_models::available_pyannote_models(&data_dir);
 
-    let model = all_models
-        .iter()
-        .find(|m| m.id == model_id)
-        .ok_or_else(|| format!("Unknown model ID: {model_id}"))?;
-
-    let path = stt_models::whisper_model_path(&data_dir, &model.filename);
+    let path = if let Some(m) = all_whisper.iter().find(|m| m.id == model_id) {
+        stt_models::whisper_model_path(&data_dir, &m.filename)
+    } else if let Some(m) = all_pyannote.iter().find(|m| m.id == model_id) {
+        stt_models::pyannote_model_path(&data_dir, &m.filename)
+    } else {
+        return Err(format!("Unknown model ID: {model_id}"));
+    };
 
     stt_models::delete_model(&path)
         .await

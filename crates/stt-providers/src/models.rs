@@ -139,6 +139,40 @@ pub fn available_whisper_models(app_data_dir: &Path) -> Vec<ModelInfo> {
         .collect()
 }
 
+pub fn available_pyannote_models(app_data_dir: &Path) -> Vec<ModelInfo> {
+    let models_raw = [
+        (
+            "pyannote-segmentation",
+            "segmentation-3.0.onnx",
+            5_983_836u64,
+            "https://github.com/thewh1teagle/pyannote-rs/releases/download/v0.1.0/segmentation-3.0.onnx",
+            "Pyannote segmentation 3.0 (~6 MB) — voice activity detection",
+        ),
+        (
+            "pyannote-embedding",
+            "wespeaker_en_voxceleb_CAM++.onnx",
+            29_292_684u64,
+            "https://github.com/thewh1teagle/pyannote-rs/releases/download/v0.1.0/wespeaker_en_voxceleb_CAM++.onnx",
+            "WeSpeaker CAM++ (~28 MB) — speaker embedding extraction",
+        ),
+    ];
+
+    models_raw
+        .iter()
+        .map(|(id, filename, size_bytes, url, description)| {
+            let path = pyannote_model_path(app_data_dir, filename);
+            ModelInfo {
+                id: id.to_string(),
+                filename: filename.to_string(),
+                size_bytes: *size_bytes,
+                download_url: url.to_string(),
+                description: description.to_string(),
+                downloaded: path.exists(),
+            }
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Check required models
 // ---------------------------------------------------------------------------

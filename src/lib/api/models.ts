@@ -13,6 +13,10 @@ export async function listWhisperModels(): Promise<ModelInfo[]> {
   return invoke('list_whisper_models');
 }
 
+export async function listPyannoteModels(): Promise<ModelInfo[]> {
+  return invoke('list_pyannote_models');
+}
+
 export async function downloadModel(modelId: string): Promise<void> {
   return invoke('download_model', { modelId });
 }

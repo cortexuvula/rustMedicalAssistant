@@ -23,6 +23,7 @@ pub fn run() {
         .manage(app_state)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![
             commands::recordings::list_recordings,
             commands::recordings::get_recording,
@@ -61,6 +62,7 @@ pub fn run() {
             commands::rag::search_rag,
             commands::rag::rag_stats,
             commands::models::list_whisper_models,
+            commands::models::list_pyannote_models,
             commands::models::download_model,
             commands::models::delete_model,
         ])
