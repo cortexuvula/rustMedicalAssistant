@@ -1,9 +1,11 @@
+pub mod audio_prep;
 pub mod failover;
 pub mod deepgram;
 pub mod groq_whisper;
 pub mod elevenlabs_stt;
 pub mod modulate;
 pub mod whisper_local;
+pub mod merge;
 
 use thiserror::Error;
 
