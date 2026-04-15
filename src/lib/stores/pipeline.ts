@@ -19,13 +19,12 @@ interface PipelineState {
 }
 
 function createPipelineStore() {
-  const { subscribe, update, set } = writable<PipelineState>({
+  const { subscribe, update } = writable<PipelineState>({
     current: null,
     active: {},
   });
 
   let progressUnlisten: UnlistenFn | null = null;
-  let completeUnlisten: UnlistenFn | null = null;
 
   return {
     subscribe,
@@ -101,7 +100,6 @@ function createPipelineStore() {
 
     destroy() {
       progressUnlisten?.();
-      completeUnlisten?.();
     },
   };
 }

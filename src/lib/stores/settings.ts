@@ -17,6 +17,7 @@ const defaults: AppConfig = {
   auto_generate_soap: false,
   search_top_k: 5,
   mmr_lambda: 0.7,
+  storage_path: null,
 };
 
 function createSettingsStore() {
