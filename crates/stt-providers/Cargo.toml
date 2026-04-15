@@ -3,14 +3,8 @@ name = "medical-stt-providers"
 version.workspace = true
 edition.workspace = true
 
-[features]
-default = []
-local-stt = ["whisper-rs"]
-
 [dependencies]
 medical-core = { path = "../core" }
-reqwest = { workspace = true }
-hound = "3.5"
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,7 +12,14 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
-whisper-rs = { version = "0.16", optional = true }
+reqwest = { workspace = true }
+tokio-stream = "0.1"
+
+# Local STT
+whisper-rs = { version = "0.16", features = ["metal"] }
+# pyannote-rs has a broken ndarray version conflict (0.16 vs 0.17) in v0.3.4.
+# Diarization module is stubbed out until a working crate is available.
+# Candidates: speakrs (best quality), native-pyannote-rs, or patched pyannote-rs.
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
