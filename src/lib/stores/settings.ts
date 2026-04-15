@@ -7,7 +7,7 @@ const defaults: AppConfig = {
   language: 'en-US',
   ai_provider: 'openai',
   ai_model: 'gpt-4o',
-  stt_provider: 'groq',
+  whisper_model: 'large-v3-turbo',
   tts_provider: 'elevenlabs',
   tts_voice: 'default',
   temperature: 0.4,
