@@ -13,6 +13,8 @@ use medical_ai_providers::ollama::OllamaProvider;
 use medical_ai_providers::lmstudio::LmStudioProvider;
 use medical_ai_providers::ProviderRegistry;
 
+use medical_core::types::settings::AppConfig;
+
 use medical_agents::orchestrator::AgentOrchestrator;
 use medical_agents::tools::{RagSearchTool, ToolRegistry};
 
@@ -76,7 +78,7 @@ pub struct AppState {
 }
 
 /// Read saved API keys and register all available AI providers.
-pub fn init_ai_providers(keys: &KeyStorage) -> ProviderRegistry {
+pub fn init_ai_providers(keys: &KeyStorage, config: &AppConfig) -> ProviderRegistry {
     let mut registry = ProviderRegistry::new();
 
     // OpenAI
@@ -113,9 +115,11 @@ pub fn init_ai_providers(keys: &KeyStorage) -> ProviderRegistry {
     info!("Registering Ollama provider (local)");
     registry.register(Arc::new(OllamaProvider::new(None)));
 
-    // LM Studio — always available (local, no key needed)
-    info!("Registering LM Studio provider (local)");
-    registry.register(Arc::new(LmStudioProvider::new(None)));
+    // LM Studio — always available (local or remote, no key needed)
+    let lmstudio_host = if config.lmstudio_host.is_empty() { "localhost" } else { &config.lmstudio_host };
+    let lmstudio_url = format!("http://{}:{}", lmstudio_host, config.lmstudio_port);
+    info!(url = %lmstudio_url, "Registering LM Studio provider");
+    registry.register(Arc::new(LmStudioProvider::new(Some(&lmstudio_url))));
 
     info!("AI providers available: {:?}", registry.list_available());
     registry
@@ -155,14 +159,15 @@ impl AppState {
         let config_dir = data_dir.join("config");
         let keys = KeyStorage::open(&config_dir)?;
 
-        // Initialize provider registries from saved API keys
-        let mut ai_providers = init_ai_providers(&keys);
-
         // Load saved settings to configure preferred providers
         let config = {
             let conn = db.conn().ok();
             conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
         };
+        let config_ref = config.as_ref().cloned().unwrap_or_default();
+
+        // Initialize provider registries from saved API keys + config
+        let mut ai_providers = init_ai_providers(&keys, &config_ref);
 
         let whisper_model = config.as_ref()
             .map(|c| c.whisper_model.as_str())
