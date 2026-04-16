@@ -174,6 +174,14 @@ fn default_auto_index_rag() -> bool {
     true
 }
 
+fn default_lmstudio_host() -> String {
+    "localhost".into()
+}
+
+fn default_lmstudio_port() -> u16 {
+    1234
+}
+
 // ---------------------------------------------------------------------------
 // AppConfig
 // ---------------------------------------------------------------------------
@@ -208,6 +216,11 @@ pub struct AppConfig {
     pub tts_provider: String,
     #[serde(default = "default_tts_voice")]
     pub tts_voice: String,
+    // LM Studio remote server
+    #[serde(default = "default_lmstudio_host")]
+    pub lmstudio_host: String,
+    #[serde(default = "default_lmstudio_port")]
+    pub lmstudio_port: u16,
 
     // Temperature
     #[serde(default = "default_temperature")]
@@ -315,6 +328,8 @@ mod tests {
         assert_eq!(config.max_retry_attempts, 3);
         assert_eq!(config.window_width, 1200);
         assert_eq!(config.window_height, 800);
+        assert_eq!(config.lmstudio_host, "localhost");
+        assert_eq!(config.lmstudio_port, 1234);
     }
 
     #[test]
