@@ -120,7 +120,9 @@ impl VectorsRepo {
             .query_map([document_id], |row| {
                 let blob: Option<Vec<u8>> = row.get(3)?;
                 let embedding = blob.map(|b| {
-                    bytemuck::cast_slice::<u8, f32>(&b).to_vec()
+                    bytemuck::try_cast_slice::<u8, f32>(&b)
+                        .unwrap_or(&[])
+                        .to_vec()
                 });
 
                 Ok(DocumentChunk {

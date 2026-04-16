@@ -57,8 +57,15 @@ function createPipelineStore() {
             recordings.load(); // Refresh recordings list
             setTimeout(() => {
               update((s) => {
-                const { [recording_id]: _, ...rest } = s.active;
-                return { ...s, active: rest };
+                // Only remove if the entry is still in a terminal state — a
+                // re-launched pipeline for the same recording ID should not be
+                // cleaned up by a stale timer from the previous run.
+                const existing = s.active[recording_id];
+                if (!existing || existing.stage === 'completed' || existing.stage === 'failed') {
+                  const { [recording_id]: _, ...rest } = s.active;
+                  return { ...s, active: rest };
+                }
+                return s;
               });
             }, 30000);
           }

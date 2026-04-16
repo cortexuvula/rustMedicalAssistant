@@ -117,6 +117,9 @@ function createAudioStore() {
     async stop() {
       if (busy) return;
       busy = true;
+      // Capture pre-stop state so we only restore the timer if we were
+      // actively recording (not paused).
+      const wasRecording = get(store).state === 'recording';
       clearTimer();
       try {
         const recordingId = await audioApi.stopRecording();
@@ -141,7 +144,7 @@ function createAudioStore() {
           ...s,
           error: e?.toString() || 'Failed to stop recording',
         }));
-        startTimer(); // Restore timer if we were recording
+        if (wasRecording) startTimer(); // Only restore timer if we were actively recording
       } finally {
         busy = false;
       }

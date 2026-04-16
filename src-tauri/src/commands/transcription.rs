@@ -23,13 +23,18 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
 
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => {
-            reader.into_samples::<f32>().filter_map(|s| s.ok()).collect()
+            reader
+                .into_samples::<f32>()
+                .collect::<Result<Vec<f32>, _>>()
+                .map_err(|e| format!("Corrupt WAV sample data: {e}"))?
         }
         hound::SampleFormat::Int => {
             let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .into_samples::<i32>()
-                .filter_map(|s| s.ok())
+                .collect::<Result<Vec<i32>, _>>()
+                .map_err(|e| format!("Corrupt WAV sample data: {e}"))?
+                .into_iter()
                 .map(|s| s as f32 / max_val)
                 .collect()
         }
@@ -179,19 +184,46 @@ pub async fn transcribe_recording(
         match guard.as_ref() {
             Some(stt) => stt.clone(),
             None => {
-                tracing::error!("No STT provider configured — cannot transcribe");
-                return Err(
-                    "No STT provider configured. Download a Whisper model in Settings → Audio / STT.".to_string()
-                );
+                let err_msg = "No STT provider configured. Download a Whisper model in Settings → Audio / STT.".to_string();
+                tracing::error!("{err_msg}");
+                // Mark recording as Failed so it doesn't stay stuck at Processing.
+                let db = Arc::clone(&state.db);
+                let mut rec = recording;
+                rec.status = ProcessingStatus::Failed {
+                    error: err_msg.clone(),
+                    retry_count: 0,
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = db.conn() {
+                        let _ = RecordingsRepo::update(&conn, &rec);
+                    }
+                })
+                .await;
+                return Err(err_msg);
             }
         }
     };
-    let transcript = stt.transcribe(audio, config)
-        .await
-        .map_err(|e| {
+    let transcript = match stt.transcribe(audio, config).await {
+        Ok(t) => t,
+        Err(e) => {
+            let err_msg = format!("Transcription failed: {e}");
             tracing::error!(error = %e, "STT transcription failed");
-            format!("Transcription failed: {e}")
-        })?;
+            // Mark recording as Failed so it doesn't stay stuck at Processing.
+            let db = Arc::clone(&state.db);
+            let mut rec = recording;
+            rec.status = ProcessingStatus::Failed {
+                error: err_msg.clone(),
+                retry_count: 0,
+            };
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(conn) = db.conn() {
+                    let _ = RecordingsRepo::update(&conn, &rec);
+                }
+            })
+            .await;
+            return Err(err_msg);
+        }
+    };
 
     tracing::info!(
         provider = %transcript.provider,

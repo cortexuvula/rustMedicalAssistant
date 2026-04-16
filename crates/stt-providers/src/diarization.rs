@@ -124,7 +124,7 @@ impl SpeakerDiarizer {
         let frame_start: usize = 721;
 
         let mut is_speeching = false;
-        let mut offset = frame_start;
+        let mut offset = 0_usize;
         let mut start_offset = 0.0_f64;
         let mut segments = Vec::new();
 
@@ -138,6 +138,9 @@ impl SpeakerDiarizer {
         for chunk_start in (0..padded.len()).step_by(window_size) {
             let chunk_end = (chunk_start + window_size).min(padded.len());
             let window = &padded[chunk_start..chunk_end];
+
+            // Reset offset to this window's starting sample position.
+            offset = chunk_start + frame_start;
 
             // Convert i16 window to f32 for the model
             let window_f32: Vec<f32> = window.iter().map(|&s| s as f32).collect();

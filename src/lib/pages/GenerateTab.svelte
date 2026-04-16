@@ -53,20 +53,23 @@
 
   async function handleGenerate(type: 'soap' | 'referral' | 'letter') {
     if (!$selectedRecording) return;
+    // Capture the recording ID upfront — $selectedRecording can change or
+    // become null during the awaits below if the user navigates away.
+    const recordingId = $selectedRecording.id;
     generation.startGenerating(type);
     try {
       if (type === 'soap') {
         const ctx = contextText.trim() || undefined;
         console.log('[GenerateTab] SOAP generate with context:', ctx ? `"${ctx.substring(0, 100)}..." (${ctx.length} chars)` : '(none)');
-        await generateSoap($selectedRecording.id, undefined, ctx);
+        await generateSoap(recordingId, undefined, ctx);
       } else if (type === 'referral') {
-        await generateReferral($selectedRecording.id);
+        await generateReferral(recordingId);
       } else {
-        await generateLetter($selectedRecording.id);
+        await generateLetter(recordingId);
       }
       // Refresh recording data and list in parallel
       await Promise.all([
-        selectRecording($selectedRecording.id),
+        selectRecording(recordingId),
         recordings.load(),
       ]);
       generation.finish();

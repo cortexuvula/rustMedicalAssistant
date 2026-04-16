@@ -75,15 +75,33 @@ function createChatStore() {
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      if (safetyTimeout) clearTimeout(safetyTimeout);
       tokenUnlisten?.();
       doneUnlisten?.();
       errorUnlisten?.();
       stopStreaming();
     };
 
+    // Safety timeout: if chat-done/chat-error never fire (backend crash,
+    // stream silently ends), clean up after 5 minutes so chat isn't stuck.
+    let safetyTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      if (!cleaned) {
+        appendToLast('\n\n(Stream timed out — no response received)');
+        cleanup();
+      }
+    }, 5 * 60 * 1000);
+
     try {
       tokenUnlisten = await listen<string>('chat-token', (event) => {
         appendToLast(event.payload);
+        // Reset safety timeout on each token — the stream is still alive.
+        if (safetyTimeout) clearTimeout(safetyTimeout);
+        safetyTimeout = setTimeout(() => {
+          if (!cleaned) {
+            appendToLast('\n\n(Stream timed out)');
+            cleanup();
+          }
+        }, 5 * 60 * 1000);
       });
       doneUnlisten = await listen('chat-done', () => {
         cleanup();

@@ -33,17 +33,32 @@ pub async fn start_recording(
 ) -> Result<String, String> {
     info!("Starting audio recording");
 
-    // Ensure we are not already recording.
+    // Atomically check-and-set recording flag to prevent concurrent recordings.
     {
-        let active = state.recording_active.lock().await;
+        let mut active = state.recording_active.lock().await;
         if *active {
             warn!("Attempted to start recording while another is in progress");
             return Err("A recording is already in progress".into());
         }
+        *active = true;
+    }
+
+    // Helper: reset recording_active on error so the user isn't locked out.
+    macro_rules! try_or_reset {
+        ($state:expr, $expr:expr) => {
+            match $expr {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut active = $state.recording_active.lock().await;
+                    *active = false;
+                    return Err(e);
+                }
+            }
+        };
     }
 
     // Resolve recordings directory from settings (custom path or default).
-    let recordings_dir = resolve_recordings_dir(&state.db, &state.data_dir)?;
+    let recordings_dir = try_or_reset!(state, resolve_recordings_dir(&state.db, &state.data_dir));
 
     // Generate UUID and human-readable filename.
     let recording_id = Uuid::new_v4();
@@ -52,15 +67,15 @@ pub async fn start_recording(
     let wav_path = recordings_dir.join(format!("{}.wav", friendly_name));
 
     // Read the configured input device and sample rate from settings.
-    let (input_device_name, sample_rate) = {
+    let (input_device_name, sample_rate) = try_or_reset!(state, {
         let conn = state.db.conn().map_err(|e| e.to_string())?;
         let config = medical_db::settings::SettingsRepo::load_config(&conn)
             .map_err(|e| e.to_string())?;
-        (
+        Ok::<_, String>((
             config.input_device.filter(|s| !s.is_empty()),
             config.sample_rate,
-        )
-    };
+        ))
+    });
 
     // Capture values for logging before they move into closures.
     let device_name_for_log = input_device_name.clone().unwrap_or_else(|| "default".to_string());
@@ -91,9 +106,12 @@ pub async fn start_recording(
         let _ = tx.send(result);
     });
 
-    let (send_handle, waveform_rx) = rx
-        .recv()
-        .map_err(|_| "Audio capture thread panicked".to_string())??;
+    let (send_handle, waveform_rx) = try_or_reset!(
+        state,
+        rx.recv()
+            .map_err(|_| "Audio capture thread panicked".to_string())
+            .and_then(|r| r)
+    );
 
     // Store capture handle in AppState.
     {
@@ -109,12 +127,6 @@ pub async fn start_recording(
             wav_path,
             started_at: Instant::now(),
         });
-    }
-
-    // Set recording active.
-    {
-        let mut active = state.recording_active.lock().await;
-        *active = true;
     }
 
     info!(

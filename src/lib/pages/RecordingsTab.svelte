@@ -17,8 +17,13 @@
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    await recordings.remove(deleteTarget.id);
-    deleteTarget = null;
+    try {
+      await recordings.remove(deleteTarget.id);
+    } catch (err) {
+      console.error('Failed to delete recording:', err);
+    } finally {
+      deleteTarget = null;
+    }
   }
 </script>
 

@@ -4,11 +4,15 @@ use std::time::{Duration, Instant};
 use reqwest::{Client, header};
 
 /// Build a reqwest client with Bearer-token auth.
+///
+/// # Panics
+/// Panics if the API key contains characters that are invalid in HTTP header
+/// values (e.g. newlines, non-visible ASCII). This is a configuration error
+/// that should be caught at startup, not silently degraded.
 pub fn build_client(api_key: &str, timeout_secs: u64) -> reqwest::Result<Client> {
     let mut auth_value =
-        header::HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap_or_else(|_| {
-            header::HeaderValue::from_static("Bearer invalid")
-        });
+        header::HeaderValue::from_str(&format!("Bearer {api_key}"))
+            .expect("API key contains invalid HTTP header characters");
     auth_value.set_sensitive(true);
 
     let mut headers = header::HeaderMap::new();
@@ -29,11 +33,10 @@ pub fn build_client_custom_auth(
     timeout_secs: u64,
 ) -> reqwest::Result<Client> {
     let header_name = header::HeaderName::from_bytes(header_name.as_bytes())
-        .unwrap_or_else(|_| header::HeaderName::from_static("x-api-key"));
+        .expect("custom auth header name is invalid");
 
-    let mut header_value = header::HeaderValue::from_str(api_key).unwrap_or_else(|_| {
-        header::HeaderValue::from_static("invalid")
-    });
+    let mut header_value = header::HeaderValue::from_str(api_key)
+        .expect("API key contains invalid HTTP header characters");
     header_value.set_sensitive(true);
 
     let mut headers = header::HeaderMap::new();

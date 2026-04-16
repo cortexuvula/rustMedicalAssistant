@@ -418,14 +418,18 @@ pub fn sanitize_prompt(text: &str) -> String {
 
     let mut result = text.to_string();
 
-    // Truncate
+    // Truncate (find a valid UTF-8 boundary to avoid panicking on multi-byte chars)
     if result.len() > MAX_PROMPT_LENGTH {
         warn!(
             "Prompt truncated from {} to {} characters",
             result.len(),
             MAX_PROMPT_LENGTH
         );
-        result.truncate(MAX_PROMPT_LENGTH);
+        let mut end = MAX_PROMPT_LENGTH;
+        while !result.is_char_boundary(end) {
+            end -= 1;
+        }
+        result.truncate(end);
         result.push_str("...[TRUNCATED]");
     }
 
@@ -484,7 +488,11 @@ pub fn build_user_prompt(transcript: &str, context: Option<&str>) -> String {
                     "Context truncated to {} chars for SOAP generation",
                     MAX_CONTEXT_LENGTH
                 );
-                clean_ctx.truncate(MAX_CONTEXT_LENGTH);
+                let mut end = MAX_CONTEXT_LENGTH;
+                while !clean_ctx.is_char_boundary(end) {
+                    end -= 1;
+                }
+                clean_ctx.truncate(end);
                 clean_ctx.push_str("...[truncated]");
             }
             info!(

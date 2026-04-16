@@ -20,7 +20,7 @@ use crate::RagError;
 /// (behind the `graph` feature) for direct, more powerful Datalog queries.
 pub struct GraphSearch {
     db: Arc<Database>,
-    initialized: std::sync::Once,
+    initialized: std::sync::OnceLock<Result<(), String>>,
 }
 
 impl GraphSearch {
@@ -28,24 +28,23 @@ impl GraphSearch {
     pub fn new(db: Arc<Database>) -> Self {
         Self {
             db,
-            initialized: std::sync::Once::new(),
+            initialized: std::sync::OnceLock::new(),
         }
     }
 
     /// Ensure the graph tables exist (created lazily on first use).
+    ///
+    /// Uses `OnceLock` so that: if initialization fails, the error is cached
+    /// and consistently reported on every subsequent call (instead of silently
+    /// returning `Ok` like `std::sync::Once` would).
     fn ensure_tables(&self) -> Result<(), RagError> {
-        let mut init_error: Option<RagError> = None;
-
-        self.initialized.call_once(|| {
-            if let Err(e) = self.create_tables() {
-                init_error = Some(e);
-            }
+        let result = self.initialized.get_or_init(|| {
+            self.create_tables().map_err(|e| e.to_string())
         });
-
-        if let Some(e) = init_error {
-            return Err(e);
+        match result {
+            Ok(()) => Ok(()),
+            Err(msg) => Err(RagError::Database(msg.clone())),
         }
-        Ok(())
     }
 
     fn create_tables(&self) -> Result<(), RagError> {
