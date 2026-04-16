@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import * as audioApi from '../api/audio';
+import { log } from '../api/logging';
 
 export type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
@@ -61,6 +62,7 @@ function createAudioStore() {
         });
 
         const recordingId = await audioApi.startRecording();
+        log.info('Recording started', { recordingId, device: device ?? 'default' });
         update((s) => ({
           ...s,
           state: 'recording',
@@ -72,6 +74,7 @@ function createAudioStore() {
         }));
         startTimer();
       } catch (e: any) {
+        log.error('Failed to start recording', { error: String(e), device: device ?? 'default' });
         if (waveformUnlisten) {
           waveformUnlisten();
           waveformUnlisten = null;
@@ -117,6 +120,7 @@ function createAudioStore() {
       clearTimer();
       try {
         const recordingId = await audioApi.stopRecording();
+        log.info('Recording stopped', { recordingId });
         if (waveformUnlisten) {
           waveformUnlisten();
           waveformUnlisten = null;
@@ -127,6 +131,7 @@ function createAudioStore() {
           lastRecordingId: recordingId,
         }));
       } catch (e: any) {
+        log.error('Failed to stop recording', { error: String(e) });
         if (waveformUnlisten) {
           waveformUnlisten();
           waveformUnlisten = null;

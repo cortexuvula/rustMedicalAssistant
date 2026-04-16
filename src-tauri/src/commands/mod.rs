@@ -2,6 +2,7 @@ pub mod audio;
 pub mod chat;
 pub mod export;
 pub mod generation;
+pub mod logging;
 pub mod models;
 pub mod pipeline;
 pub mod providers;

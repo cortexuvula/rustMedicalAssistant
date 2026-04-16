@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::Emitter;
+use tracing::{info, error, instrument};
 use uuid::Uuid;
 
 use medical_db::recordings::RecordingsRepo;
@@ -23,6 +24,7 @@ struct PipelineProgress {
 /// Progress is reported via `pipeline-progress` events so the frontend can
 /// track multiple concurrent pipelines by recording ID.
 #[tauri::command]
+#[instrument(skip(app, state, context), fields(recording_id = %recording_id))]
 pub async fn process_recording(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -30,6 +32,11 @@ pub async fn process_recording(
     context: Option<String>,
     template: Option<String>,
 ) -> Result<String, String> {
+    info!(
+        has_context = context.is_some(),
+        template = template.as_deref().unwrap_or("default"),
+        "Pipeline started: transcribe → SOAP"
+    );
     let rid = recording_id.clone();
 
     // If no explicit template, read the user's preferred template from settings.
@@ -69,9 +76,12 @@ pub async fn process_recording(
     .await;
 
     if let Err(ref e) = transcript_result {
+        error!(error = %e, "Pipeline failed at transcription stage");
         emit_progress(&app, &rid, "failed", Some(e.clone()));
         return Err(e.clone());
     }
+
+    info!("Pipeline stage 1 complete: transcription succeeded");
 
     // --- Stage 2: Generate SOAP ---
     emit_progress(&app, &rid, "generating_soap", None);
@@ -91,6 +101,11 @@ pub async fn process_recording(
             let display_name = get_recording_display_name(&state, &recording_id).await;
             emit_progress(&app, &rid, "completed", None);
 
+            info!(
+                soap_len = soap_text.len(),
+                "Pipeline complete: transcription + SOAP generation succeeded"
+            );
+
             // Emit a dedicated notification event for the toast
             let _ = app.emit("pipeline-complete", serde_json::json!({
                 "recording_id": rid,
@@ -100,6 +115,7 @@ pub async fn process_recording(
             Ok(soap_text)
         }
         Err(e) => {
+            error!(error = %e, "Pipeline failed at SOAP generation stage");
             emit_progress(&app, &rid, "failed", Some(e.clone()));
             Err(e)
         }

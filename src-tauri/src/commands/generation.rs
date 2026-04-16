@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::Emitter;
-use tracing::debug;
+use tracing::{debug, info, error, instrument};
 use uuid::Uuid;
 
 use medical_core::traits::AiProvider;
@@ -203,6 +203,7 @@ pub async fn generate_soap(
     result
 }
 
+#[instrument(skip(state, context), fields(recording_id = %recording_id))]
 async fn generate_soap_inner(
     state: &AppState,
     recording_id: &str,
@@ -218,6 +219,15 @@ async fn generate_soap_inner(
         .as_deref()
         .filter(|t| !t.is_empty())
         .ok_or("Recording has no transcript. Run transcription first.")?;
+
+    info!(
+        provider = %provider.name(),
+        model = %settings.model,
+        template = template.unwrap_or("follow_up"),
+        transcript_len = transcript.len(),
+        context_len = context.map(|c| c.len()).unwrap_or(0),
+        "Generating SOAP note"
+    );
 
     // Build prompts with full config
     let soap_template = template.map(parse_soap_template).unwrap_or_default();
@@ -254,8 +264,14 @@ async fn generate_soap_inner(
 
     let raw_soap = response.content;
     if raw_soap.is_empty() {
+        error!("AI returned an empty SOAP note");
         return Err("AI returned an empty SOAP note.".into());
     }
+
+    info!(
+        raw_len = raw_soap.len(),
+        "AI completion received, post-processing"
+    );
 
     // Post-process: strip markdown, fix paragraph formatting
     let soap_text = soap_generator::postprocess_soap(&raw_soap);

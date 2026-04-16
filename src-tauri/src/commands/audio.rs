@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use tauri::Emitter;
+use tracing::{info, warn, instrument};
 use uuid::Uuid;
 
 use medical_audio::capture::CaptureConfig;
@@ -25,14 +26,18 @@ pub fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
+#[instrument(skip(app, state), name = "audio::start_recording")]
 pub async fn start_recording(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
+    info!("Starting audio recording");
+
     // Ensure we are not already recording.
     {
         let active = state.recording_active.lock().await;
         if *active {
+            warn!("Attempted to start recording while another is in progress");
             return Err("A recording is already in progress".into());
         }
     }
@@ -56,6 +61,10 @@ pub async fn start_recording(
             config.sample_rate,
         )
     };
+
+    // Capture values for logging before they move into closures.
+    let device_name_for_log = input_device_name.clone().unwrap_or_else(|| "default".to_string());
+    let wav_path_for_log = wav_path.display().to_string();
 
     // Start capture on a dedicated std::thread so the !Send CaptureHandle
     // never crosses a thread boundary via tokio::spawn_blocking.  We wrap
@@ -108,6 +117,14 @@ pub async fn start_recording(
         *active = true;
     }
 
+    info!(
+        recording_id = %recording_id,
+        wav_path = %wav_path_for_log,
+        device = %device_name_for_log,
+        sample_rate,
+        "Audio recording started"
+    );
+
     // Spawn a blocking task to consume waveform data and emit Tauri events.
     let app_clone = app.clone();
     tokio::task::spawn_blocking(move || {
@@ -124,6 +141,7 @@ pub async fn start_recording(
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
+#[instrument(skip(state), name = "audio::stop_recording")]
 pub async fn stop_recording(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
@@ -167,9 +185,16 @@ pub async fn stop_recording(
     let duration_secs = current.started_at.elapsed().as_secs_f64();
 
     // Get file size of the WAV file.
-    let file_size = std::fs::metadata(&current.wav_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = match std::fs::metadata(&current.wav_path) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            tracing::warn!(path = %current.wav_path.display(), error = %e, "Could not read WAV file metadata");
+            0
+        }
+    };
+    if file_size == 0 {
+        tracing::warn!(path = %current.wav_path.display(), "WAV file is empty — audio may not have been captured");
+    }
 
     let recording_uuid = Uuid::parse_str(&current.id).map_err(|e| e.to_string())?;
 
@@ -190,6 +215,14 @@ pub async fn stop_recording(
     // Insert into DB.
     let conn = state.db.conn().map_err(|e| e.to_string())?;
     RecordingsRepo::insert(&conn, &recording).map_err(|e| e.to_string())?;
+
+    info!(
+        recording_id = %current.id,
+        duration_secs = %format!("{:.1}", duration_secs),
+        file_size_bytes = file_size,
+        wav_path = %current.wav_path.display(),
+        "Recording stopped and saved"
+    );
 
     Ok(current.id)
 }

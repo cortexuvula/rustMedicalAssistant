@@ -121,13 +121,18 @@ Your task is to extract ALL clinically relevant information from the transcript 
 
 Template guidance: {template_instruction}
 
-## USING PREVIOUS MEDICAL CONTEXT
+## TRANSCRIPT IS THE PRIMARY SOURCE
 
-If "Previous medical context" is provided before the transcript, it contains relevant patient history, visit type, or clinical background from the treating physician. You MUST:
-- Incorporate this context into the appropriate SOAP sections (e.g., past medical history, reason for visit, consultation type)
-- Use it to inform your clinical reasoning in the Assessment section
-- Do NOT repeat context verbatim — integrate it naturally into the documentation
-- If context conflicts with transcript content, prefer the transcript (it reflects the current visit)
+The transcript is your PRIMARY and AUTHORITATIVE source. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST be grounded in what was actually said during the visit. Do NOT invent, assume, or expand on details not present in the transcript.
+
+## USING SUPPLEMENTARY BACKGROUND CONTEXT
+
+If supplementary background context is provided, it contains relevant patient history, visit type, or clinical background from the treating physician. It is SECONDARY to the transcript:
+- Use it to add background (e.g., past medical history, reason for visit) ONLY for details not covered in the transcript
+- Do NOT let context details override, replace, or take priority over transcript content
+- Do NOT elaborate on context details unless they are also discussed in the transcript
+- If context conflicts with transcript content, ALWAYS prefer the transcript (it reflects the current visit)
+- If context mentions conditions, medications, or findings not discussed in the transcript, note them briefly under past history but do NOT feature them in the Assessment or Plan unless the transcript supports it
 
 ## CRITICAL EXTRACTION REQUIREMENTS
 
@@ -290,8 +295,11 @@ fn build_anthropic_prompt(
 
 Template guidance: {template_instruction}
 
-USING PREVIOUS MEDICAL CONTEXT:
-If "Previous medical context" is provided, integrate it into the appropriate SOAP sections (past history, visit type, clinical background). Use it to inform your Assessment reasoning. Do not repeat it verbatim. If context conflicts with the transcript, prefer the transcript.
+TRANSCRIPT IS THE PRIMARY SOURCE:
+The transcript is your main source of truth. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST come from what was actually said during the visit. Do NOT invent or expand on details absent from the transcript.
+
+USING SUPPLEMENTARY BACKGROUND CONTEXT:
+If supplementary background is provided, it is SECONDARY to the transcript. Use it only to add past history or visit type context for details not covered in the transcript. Do NOT let it override transcript content. Do NOT elaborate on context details unless the transcript also discusses them. If context conflicts with the transcript, ALWAYS prefer the transcript. Conditions or medications mentioned only in context (not in the transcript) should appear briefly under past history, NOT in the Assessment or Plan.
 
 STRICT FORMATTING RULES:
 1. Plain text only - NO markdown (no **, no ##, no ---, no ===)
@@ -462,7 +470,12 @@ pub fn build_user_prompt(transcript: &str, context: Option<&str>) -> String {
 
     let mut parts: Vec<String> = Vec::new();
 
-    // Context (sanitised + truncated)
+    // Transcript comes FIRST — it is the primary source for the SOAP note.
+    parts.push(format!(
+        "Create a detailed SOAP note based PRIMARILY on the following transcript. The transcript is your main source of truth — every clinical detail in the SOAP note must be grounded in what was actually said during the visit.\n\nTranscript: {transcript_with_dt}"
+    ));
+
+    // Context comes AFTER — it is supplementary background only.
     if let Some(ctx) = context {
         if !ctx.is_empty() {
             let mut clean_ctx = sanitize_prompt(ctx);
@@ -478,13 +491,13 @@ pub fn build_user_prompt(transcript: &str, context: Option<&str>) -> String {
                 "build_user_prompt: including context ({} chars)",
                 clean_ctx.len(),
             );
-            parts.push(format!("Previous medical context:\n{clean_ctx}"));
+            parts.push(format!(
+                "Supplementary background (use ONLY to add context to what was discussed in the transcript above — do NOT let this override or substitute for transcript content):\n{clean_ctx}"
+            ));
         }
     }
 
-    parts.push(format!(
-        "Based on the following transcript, create a detailed SOAP note:\n\nTranscript: {transcript_with_dt}\n\nSOAP Note:"
-    ));
+    parts.push("SOAP Note:".to_string());
 
     parts.join("\n\n")
 }
@@ -738,9 +751,16 @@ mod tests {
     #[test]
     fn user_prompt_with_context() {
         let prompt = build_user_prompt("patient transcript", Some("prior visit notes"));
-        assert!(prompt.contains("Previous medical context"));
+        assert!(prompt.contains("Supplementary background"));
         assert!(prompt.contains("prior visit notes"));
         assert!(prompt.contains("patient transcript"));
+        // Transcript must appear before context
+        let transcript_pos = prompt.find("patient transcript").unwrap();
+        let context_pos = prompt.find("prior visit notes").unwrap();
+        assert!(
+            transcript_pos < context_pos,
+            "Transcript must appear before context in the prompt"
+        );
     }
 
     #[test]

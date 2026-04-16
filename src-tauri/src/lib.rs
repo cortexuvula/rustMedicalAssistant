@@ -1,21 +1,108 @@
 mod state;
 mod commands;
 
+use std::path::PathBuf;
+
 use state::AppState;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+
+/// Resolve the log directory inside the app data folder.
+///
+/// Returns `~/{data}/rust-medical-assistant/logs/` and ensures it exists.
+fn log_dir() -> PathBuf {
+    let dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("rust-medical-assistant")
+        .join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize tracing so all log output (info!, warn!, error!) is visible.
-    // Controlled via RUST_LOG env var; defaults to info-level for our crates.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                EnvFilter::new("rust_medical_assistant=debug,medical_stt_providers=debug,medical_ai_providers=info,medical_audio=info,info")
-            }),
+    // ── Logging ──────────────────────────────────────────────────────────
+    //
+    // Two layers:
+    //   1. Console (stdout) — compact, human-readable
+    //   2. Rolling file    — full detail, daily rotation, kept for 7 days
+    //
+    // Controlled via RUST_LOG env var; defaults shown below.
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "rust_medical_assistant=debug,\
+             medical_stt_providers=debug,\
+             medical_ai_providers=info,\
+             medical_audio=info,\
+             medical_processing=debug,\
+             info"
         )
+    });
+
+    let log_directory = log_dir();
+
+    // Rolling daily log file: ferri-scribe.YYYY-MM-DD.log
+    let file_appender = tracing_appender::rolling::daily(&log_directory, "ferri-scribe.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Console layer — compact format for terminal
+    let console_layer = tracing_subscriber::fmt::layer()
+        .compact();
+
+    // File layer — full timestamps, structured fields, no ANSI colors
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(console_layer)
+        .with(file_layer)
         .init();
 
+    // ── Panic hook ───────────────────────────────────────────────────────
+    //
+    // Capture panics to the tracing log so they appear in the log file,
+    // not just stderr.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic payload".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+
+        tracing::error!(
+            panic.payload = %payload,
+            panic.location = %location,
+            "PANIC"
+        );
+        default_hook(info);
+    }));
+
+    // ── Startup banner ───────────────────────────────────────────────────
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        log_dir = %log_directory.display(),
+        "FerriScribe starting"
+    );
+
+    // ── Clean up old log files (keep last 7 days) ────────────────────────
+    cleanup_old_logs(&log_directory, 7);
+
+    // ── App init ─────────────────────────────────────────────────────────
     let app_state = AppState::initialize()
         .expect("Failed to initialize application state");
 
@@ -65,7 +152,36 @@ pub fn run() {
             commands::models::list_pyannote_models,
             commands::models::download_model,
             commands::models::delete_model,
+            commands::logging::get_log_path,
+            commands::logging::get_recent_logs,
+            commands::logging::frontend_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Remove log files older than `keep_days`.
+fn cleanup_old_logs(dir: &std::path::Path, keep_days: u64) {
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(keep_days * 24 * 3600);
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log") {
+            continue;
+        }
+        if let Ok(meta) = path.metadata() {
+            if let Ok(modified) = meta.modified() {
+                if modified < cutoff {
+                    tracing::debug!(file = %path.display(), "Removing old log file");
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
 }

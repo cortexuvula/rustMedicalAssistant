@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { processRecording } from '../api/pipeline';
 import { recordings } from './recordings';
+import { log } from '../api/logging';
 
 export type PipelineStage = 'idle' | 'transcribing' | 'generating_soap' | 'completed' | 'failed';
 
@@ -48,6 +49,11 @@ function createPipelineStore() {
 
           // Clean up completed/failed entries from active map after a delay
           if (stage === 'completed' || stage === 'failed') {
+            if (stage === 'failed') {
+              log.error('Pipeline failed', { recording_id, error: error ?? 'unknown' });
+            } else {
+              log.info('Pipeline completed', { recording_id });
+            }
             recordings.load(); // Refresh recordings list
             setTimeout(() => {
               update((s) => {
@@ -73,8 +79,11 @@ function createPipelineStore() {
         active: { ...s.active, [recordingId]: entry },
       }));
 
+      log.info('Pipeline launched', { recordingId, hasContext: !!context, template: template ?? 'default' });
+
       // Fire and forget — progress comes via events
       processRecording(recordingId, context, template).catch((err) => {
+        log.error('Pipeline command failed', { recordingId, error: String(err) });
         const errorEntry: PipelineEntry = {
           recordingId,
           stage: 'failed',

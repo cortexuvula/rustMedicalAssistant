@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tauri::Emitter;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 use medical_core::types::recording::ProcessingStatus;
@@ -50,6 +51,7 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
 /// Emits `transcription-progress` events ("loading", "transcribing", "complete")
 /// so the frontend can display live status.  Returns the transcript text on success.
 #[tauri::command]
+#[instrument(skip(app, state), fields(recording_id = %recording_id))]
 pub async fn transcribe_recording(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -57,6 +59,12 @@ pub async fn transcribe_recording(
     language: Option<String>,
     diarize: Option<bool>,
 ) -> Result<String, String> {
+    info!(
+        language = language.as_deref().unwrap_or("auto"),
+        diarize = diarize.unwrap_or(true),
+        "Transcription requested"
+    );
+
     // --- emit: loading ---
     let _ = app.emit("transcription-progress", "loading");
 
@@ -125,9 +133,33 @@ pub async fn transcribe_recording(
         "Loaded WAV audio data"
     );
 
+    // Detect near-silent recordings: RMS below -60 dBFS (~0.001) means the
+    // microphone likely captured no speech.  Warn but proceed — Whisper's
+    // empty-segment filter will catch it if there truly is no speech.
+    if !audio.samples.is_empty() && rms < 0.001 {
+        tracing::warn!(
+            peak = %format!("{:.6}", peak),
+            rms = %format!("{:.6}", rms),
+            "Recording appears to be silent or near-silent — transcription may produce no text"
+        );
+    }
+
     if audio.samples.is_empty() {
         let err_msg = format!("WAV file contains no audio samples: {}", wav_path.display());
         tracing::error!("{err_msg}");
+        // Mark as Failed in DB before returning.
+        let db = Arc::clone(&state.db);
+        let mut rec = recording.clone();
+        rec.status = ProcessingStatus::Failed {
+            error: err_msg.clone(),
+            retry_count: 0,
+        };
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = db.conn() {
+                let _ = RecordingsRepo::update(&conn, &rec);
+            }
+        })
+        .await;
         return Err(err_msg);
     }
 
@@ -170,6 +202,31 @@ pub async fn transcribe_recording(
 
     // Build speaker-attributed text when diarization segments are available.
     let display_text = format_transcript_with_speakers(&transcript);
+
+    // Guard: if transcription produced no text, mark as Failed rather than
+    // silently storing an empty transcript as "Completed".
+    if display_text.trim().is_empty() {
+        let err_msg = "Transcription produced no text — the recording may be silent or too short.".to_string();
+        tracing::warn!(
+            provider = %transcript.provider,
+            segments = transcript.segments.len(),
+            "{err_msg}"
+        );
+        let db = Arc::clone(&state.db);
+        let mut rec = recording;
+        rec.status = ProcessingStatus::Failed {
+            error: err_msg.clone(),
+            retry_count: 0,
+        };
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = db.conn() {
+                let _ = RecordingsRepo::update(&conn, &rec);
+            }
+        })
+        .await;
+        let _ = app.emit("transcription-progress", "failed");
+        return Err(err_msg);
+    }
 
     // Persist the transcript and mark as Completed — on a blocking thread.
     let db = Arc::clone(&state.db);
