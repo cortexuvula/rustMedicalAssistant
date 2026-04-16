@@ -5,6 +5,7 @@ import {
   getRecording,
   searchRecordings,
   deleteRecording,
+  deleteAllRecordings,
 } from '../api/recordings';
 
 function createRecordingsStore() {
@@ -67,6 +68,18 @@ function createRecordingsStore() {
         );
       } catch (err) {
         console.error('Failed to delete recording:', err);
+        throw err;
+      }
+    },
+
+    async removeAll(): Promise<number> {
+      try {
+        const count = await deleteAllRecordings();
+        set([]);
+        selectedRecording.set(null);
+        return count;
+      } catch (err) {
+        console.error('Failed to delete all recordings:', err);
         throw err;
       }
     },

@@ -160,6 +160,21 @@ impl RecordingsRepo {
         Ok(())
     }
 
+    /// Delete all recordings. Returns the audio paths so callers can clean up files.
+    pub fn delete_all(conn: &Connection) -> DbResult<Vec<PathBuf>> {
+        let mut stmt = conn.prepare("SELECT audio_path FROM recordings")?;
+        let paths: Vec<PathBuf> = stmt
+            .query_map([], |row| {
+                let p: String = row.get(0)?;
+                Ok(PathBuf::from(p))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        conn.execute("DELETE FROM recordings", [])?;
+        Ok(paths)
+    }
+
     /// Total number of recordings in the table.
     pub fn count(conn: &Connection) -> DbResult<u32> {
         let n: i64 =

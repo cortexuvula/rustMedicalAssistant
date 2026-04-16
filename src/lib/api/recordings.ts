@@ -17,6 +17,10 @@ export async function deleteRecording(id: string): Promise<void> {
   return invoke('delete_recording', { id });
 }
 
+export async function deleteAllRecordings(): Promise<number> {
+  return invoke('delete_all_recordings');
+}
+
 export async function importAudioFile(filePath: string): Promise<string> {
   return invoke('import_audio_file', { filePath });
 }

@@ -68,6 +68,29 @@ pub fn delete_recording(
     Ok(())
 }
 
+#[tauri::command]
+pub fn delete_all_recordings(
+    state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    let conn = state.db.conn().map_err(|e| e.to_string())?;
+
+    // Delete all RAG vectors
+    let _ = conn.execute("DELETE FROM vectors", []);
+
+    // Delete all recordings and get audio paths for file cleanup
+    let paths = RecordingsRepo::delete_all(&conn).map_err(|e| e.to_string())?;
+    let count = paths.len() as u32;
+
+    // Remove audio files from disk
+    for path in &paths {
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    Ok(count)
+}
+
 /// Import an audio file from the filesystem into the recordings library.
 ///
 /// Non-WAV files (MP3, FLAC, OGG, M4A, AAC) are automatically converted to

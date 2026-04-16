@@ -116,6 +116,7 @@ pub fn run() {
             commands::recordings::get_recording,
             commands::recordings::search_recordings,
             commands::recordings::delete_recording,
+            commands::recordings::delete_all_recordings,
             commands::recordings::import_audio_file,
             commands::settings::get_settings,
             commands::settings::save_settings,

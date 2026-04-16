@@ -6,6 +6,7 @@
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
 
   let deleteTarget = $state<{ id: string; name: string } | null>(null);
+  let showDeleteAll = $state(false);
 
   onMount(() => {
     recordings.load();
@@ -23,6 +24,16 @@
       console.error('Failed to delete recording:', err);
     } finally {
       deleteTarget = null;
+    }
+  }
+
+  async function confirmDeleteAll() {
+    try {
+      await recordings.removeAll();
+    } catch (err) {
+      console.error('Failed to delete all recordings:', err);
+    } finally {
+      showDeleteAll = false;
     }
   }
 </script>
@@ -47,6 +58,15 @@
       </div>
 
     {:else}
+      <div class="list-toolbar">
+        <span class="recording-count">{$recordings.length} recording{$recordings.length === 1 ? '' : 's'}</span>
+        <button
+          class="btn-delete-all"
+          onclick={() => showDeleteAll = true}
+        >
+          Delete All
+        </button>
+      </div>
       {#each $recordings as rec (rec.id)}
         <RecordingCard
           recording={rec}
@@ -66,6 +86,15 @@
   confirmLabel="Delete"
   onConfirm={confirmDelete}
   onCancel={() => deleteTarget = null}
+/>
+
+<ConfirmDialog
+  open={showDeleteAll}
+  title="Delete All Recordings"
+  message={`This will permanently delete all ${$recordings.length} recording${$recordings.length === 1 ? '' : 's'}, including audio files, transcripts, SOAP notes, and all generated documents. This cannot be undone.`}
+  confirmLabel="Delete All"
+  onConfirm={confirmDeleteAll}
+  onCancel={() => showDeleteAll = false}
 />
 
 <style>
@@ -108,5 +137,34 @@
 
   strong {
     color: var(--text-secondary);
+  }
+
+  .list-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .recording-count {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .btn-delete-all {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--danger, #ef4444);
+    background-color: transparent;
+    border: 1px solid var(--danger, #ef4444);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-delete-all:hover {
+    background-color: rgba(239, 68, 68, 0.1);
   }
 </style>
