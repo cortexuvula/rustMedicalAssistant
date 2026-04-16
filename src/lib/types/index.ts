@@ -55,6 +55,8 @@ export interface AppConfig {
   whisper_model: string;
   tts_provider: string;
   tts_voice: string;
+  lmstudio_host: string;
+  lmstudio_port: number;
   temperature: number;
   sample_rate: number;
   autosave_enabled: boolean;

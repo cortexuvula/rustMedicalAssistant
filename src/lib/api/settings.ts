@@ -20,3 +20,7 @@ export async function setApiKey(provider: string, key: string): Promise<void> {
 export async function listApiKeys(): Promise<string[]> {
   return invoke('list_api_keys');
 }
+
+export async function testLmStudioConnection(host: string, port: number): Promise<string> {
+  return invoke('test_lmstudio_connection', { host, port });
+}

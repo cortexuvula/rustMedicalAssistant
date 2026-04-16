@@ -18,6 +18,8 @@ const defaults: AppConfig = {
   search_top_k: 5,
   mmr_lambda: 0.7,
   storage_path: null,
+  lmstudio_host: 'localhost',
+  lmstudio_port: 1234,
 };
 
 function createSettingsStore() {
