@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
-  import { listApiKeys, setApiKey } from '../api/settings';
+  import { listApiKeys, setApiKey, testLmStudioConnection } from '../api/settings';
   import { listModels, setActiveProvider, reinitProviders, type ModelInfo } from '../api/chat';
   import { listAudioDevices } from '../api/audio';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -43,6 +43,8 @@
   let modelsRefreshing = $state(false);
   let downloadingModel = $state<string | null>(null);
   let downloadProgress = $state<Record<string, { downloaded: number; total: number }>>({});
+  let lmstudioTestStatus = $state<'idle' | 'testing' | 'success' | 'error'>('idle');
+  let lmstudioTestMessage = $state('');
   let progressUnlisten: UnlistenFn | null = null;
 
   async function fetchAudioDevices() {
@@ -238,6 +240,39 @@
   async function handleTemperatureChange(e: Event) {
     const value = parseFloat((e.target as HTMLInputElement).value);
     await settings.updateField('temperature', value);
+  }
+
+  async function handleLmStudioHostChange(e: Event) {
+    const value = (e.target as HTMLInputElement).value;
+    await settings.updateField('lmstudio_host', value);
+    lmstudioTestStatus = 'idle';
+    lmstudioTestMessage = '';
+    await reinitProviders();
+  }
+
+  async function handleLmStudioPortChange(e: Event) {
+    const value = parseInt((e.target as HTMLInputElement).value, 10);
+    if (value >= 1 && value <= 65535) {
+      await settings.updateField('lmstudio_port', value);
+      lmstudioTestStatus = 'idle';
+      lmstudioTestMessage = '';
+      await reinitProviders();
+    }
+  }
+
+  async function handleTestLmStudioConnection() {
+    lmstudioTestStatus = 'testing';
+    lmstudioTestMessage = '';
+    try {
+      const host = $settings.lmstudio_host || 'localhost';
+      const port = $settings.lmstudio_port || 1234;
+      const msg = await testLmStudioConnection(host, port);
+      lmstudioTestStatus = 'success';
+      lmstudioTestMessage = msg;
+    } catch (err: any) {
+      lmstudioTestStatus = 'error';
+      lmstudioTestMessage = err?.toString() || 'Connection failed';
+    }
   }
 
   async function handleInputDeviceChange(e: Event) {
@@ -443,6 +478,58 @@
             <span>0 (Precise)</span>
             <span>2 (Creative)</span>
           </div>
+        </div>
+
+        <!-- LM Studio Server -->
+        <div class="form-group-divider"></div>
+        <h4 class="subsection-title">LM Studio Server</h4>
+        <p class="subsection-hint">
+          Configure the LM Studio server address. Use <code>localhost</code> if LM Studio runs on this machine, or enter a remote IP for a network server.
+        </p>
+
+        <div class="form-group">
+          <label for="lmstudio-host" class="form-label">Host</label>
+          <input
+            id="lmstudio-host"
+            type="text"
+            value={$settings.lmstudio_host}
+            placeholder="localhost"
+            onchange={handleLmStudioHostChange}
+            class="text-input"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="lmstudio-port" class="form-label">Port</label>
+          <input
+            id="lmstudio-port"
+            type="number"
+            value={$settings.lmstudio_port}
+            placeholder="1234"
+            min="1"
+            max="65535"
+            onchange={handleLmStudioPortChange}
+            class="text-input port-input"
+          />
+        </div>
+
+        <div class="form-group">
+          <button
+            class="btn-test-connection"
+            onclick={handleTestLmStudioConnection}
+            disabled={lmstudioTestStatus === 'testing'}
+          >
+            {#if lmstudioTestStatus === 'testing'}
+              Testing…
+            {:else}
+              Test Connection
+            {/if}
+          </button>
+          {#if lmstudioTestStatus === 'success'}
+            <span class="test-result test-success">✓ {lmstudioTestMessage}</span>
+          {:else if lmstudioTestStatus === 'error'}
+            <span class="test-result test-error">✗ {lmstudioTestMessage}</span>
+          {/if}
         </div>
       </section>
 
@@ -973,5 +1060,71 @@
   .btn-delete-model:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+  }
+
+  .form-group-divider {
+    border-top: 1px solid var(--border);
+    margin: 20px 0 16px;
+  }
+
+  .subsection-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 4px;
+  }
+
+  .subsection-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 12px;
+    line-height: 1.5;
+  }
+
+  .subsection-hint code {
+    font-size: 11px;
+    background-color: var(--bg-tertiary, #374151);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .port-input {
+    max-width: 120px;
+  }
+
+  .btn-test-connection {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background-color: var(--bg-tertiary, #374151);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .btn-test-connection:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--accent);
+  }
+
+  .btn-test-connection:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .test-result {
+    font-size: 13px;
+    margin-left: 10px;
+  }
+
+  .test-success {
+    color: #22c55e;
+  }
+
+  .test-error {
+    color: var(--danger, #ef4444);
   }
 </style>
