@@ -6,6 +6,7 @@ pub mod recipients;
 pub mod settings;
 pub mod audit;
 pub mod search;
+pub mod vocabulary;
 pub mod vectors;
 // CozoDB-backed knowledge graph. Gated behind the `graph` feature because cozo
 // uses the Sled storage engine and brings in a non-trivial dependency tree.
