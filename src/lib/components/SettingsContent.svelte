@@ -10,6 +10,9 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onDestroy } from 'svelte';
   import { listWhisperModels, listPyannoteModels, downloadModel, deleteModel, type ModelInfo as WhisperModelInfo } from '../api/models';
+  import VocabularyDialog from './VocabularyDialog.svelte';
+  import { getVocabularyCount, importVocabularyJson, exportVocabularyJson } from '../api/vocabulary';
+  import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -46,6 +49,8 @@
   let lmstudioTestStatus = $state<'idle' | 'testing' | 'success' | 'error'>('idle');
   let lmstudioTestMessage = $state('');
   let progressUnlisten: UnlistenFn | null = null;
+  let vocabDialogOpen = $state(false);
+  let vocabCount = $state<[number, number]>([0, 0]);
 
   async function fetchAudioDevices() {
     devicesLoading = true;
@@ -133,6 +138,7 @@
       fetchAudioDevices(),
       fetchWhisperModels(),
       fetchPyannoteModels(),
+      loadVocabCount(),
     ]);
     if (keys.status === 'fulfilled') {
       storedKeys = keys.value;
@@ -212,6 +218,52 @@
 
   async function handleResetStoragePath() {
     await settings.updateField('storage_path', null);
+  }
+
+  async function loadVocabCount() {
+    try {
+      vocabCount = await getVocabularyCount();
+    } catch (err) {
+      console.error('Failed to load vocabulary count:', err);
+    }
+  }
+
+  async function handleImportVocabulary() {
+    const selected = await openDialog({
+      multiple: false,
+      title: 'Import Vocabulary JSON',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (selected) {
+      try {
+        const count = await importVocabularyJson(selected as string);
+        alert(`Imported ${count} vocabulary entries.`);
+        await loadVocabCount();
+      } catch (err: any) {
+        alert(`Import failed: ${err}`);
+      }
+    }
+  }
+
+  async function handleExportVocabulary() {
+    const selected = await saveDialog({
+      title: 'Export Vocabulary JSON',
+      defaultPath: 'vocabulary.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (selected) {
+      try {
+        const count = await exportVocabularyJson(selected);
+        alert(`Exported ${count} vocabulary entries.`);
+      } catch (err: any) {
+        alert(`Export failed: ${err}`);
+      }
+    }
+  }
+
+  function handleVocabDialogClose() {
+    vocabDialogOpen = false;
+    loadVocabCount();
   }
 
   async function handleAiProviderChange(e: Event) {
@@ -366,6 +418,37 @@
             {/if}
           </div>
           <span class="form-hint">Choose where audio recordings are saved. New recordings will use this folder.</span>
+        </div>
+
+        <h3 class="section-title" style="margin-top: 24px">Custom Vocabulary</h3>
+        <p class="section-desc">Automatically correct words in transcripts after speech-to-text.</p>
+
+        <div class="form-group">
+          <label class="toggle-label">
+            <input
+              type="checkbox"
+              checked={$settings.vocabulary_enabled}
+              onchange={() => settings.updateField('vocabulary_enabled', !$settings.vocabulary_enabled)}
+            />
+            <span>Enable vocabulary corrections</span>
+          </label>
+        </div>
+
+        <div class="form-group">
+          <span class="form-label">
+            {vocabCount[0]} entries ({vocabCount[1]} enabled)
+          </span>
+          <div class="vocab-buttons">
+            <button class="btn-browse" onclick={() => { vocabDialogOpen = true; }}>
+              Manage Vocabulary
+            </button>
+            <button class="btn-browse" onclick={handleImportVocabulary}>
+              Import JSON
+            </button>
+            <button class="btn-browse" onclick={handleExportVocabulary}>
+              Export JSON
+            </button>
+          </div>
         </div>
       </section>
 
@@ -693,6 +776,8 @@
     {/if}
   </div>
 </div>
+
+<VocabularyDialog open={vocabDialogOpen} onclose={handleVocabDialogClose} />
 
 <style>
   .settings-layout {
@@ -1126,5 +1211,11 @@
 
   .test-error {
     color: var(--danger, #ef4444);
+  }
+
+  .vocab-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
   }
 </style>
