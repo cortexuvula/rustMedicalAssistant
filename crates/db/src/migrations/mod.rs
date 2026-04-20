@@ -6,6 +6,7 @@
 
 pub mod m001_initial;
 pub mod m002_rag_tables;
+pub mod m003_vocabulary;
 
 use rusqlite::Connection;
 
@@ -30,6 +31,11 @@ pub fn all_migrations() -> &'static [Migration] {
             version: 2,
             name: "rag_tables",
             up: m002_rag_tables::up,
+        },
+        Migration {
+            version: 3,
+            name: "vocabulary",
+            up: m003_vocabulary::up,
         },
     ]
 }
