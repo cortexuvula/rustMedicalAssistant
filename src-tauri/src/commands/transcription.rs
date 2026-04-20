@@ -8,6 +8,9 @@ use uuid::Uuid;
 use medical_core::types::recording::ProcessingStatus;
 use medical_core::types::stt::{AudioData, SttConfig};
 use medical_db::recordings::RecordingsRepo;
+use medical_db::vocabulary::VocabularyRepo;
+use medical_db::settings::SettingsRepo;
+use medical_processing::vocabulary_corrector;
 
 use crate::state::AppState;
 
@@ -259,6 +262,30 @@ pub async fn transcribe_recording(
         let _ = app.emit("transcription-progress", "failed");
         return Err(err_msg);
     }
+
+    // Apply vocabulary corrections if enabled
+    let db_vocab = Arc::clone(&state.db);
+    let display_text = tokio::task::spawn_blocking(move || {
+        let conn = db_vocab.conn().map_err(|e| e.to_string())?;
+        let config = SettingsRepo::load_config(&conn).ok();
+        let vocab_enabled = config.map(|c| c.vocabulary_enabled).unwrap_or(true);
+        if vocab_enabled {
+            let entries = VocabularyRepo::list_enabled(&conn).map_err(|e| e.to_string())?;
+            if !entries.is_empty() {
+                let result = vocabulary_corrector::apply_corrections(&display_text, &entries);
+                if result.total_replacements > 0 {
+                    tracing::info!(
+                        replacements = result.total_replacements,
+                        "Applied vocabulary corrections to transcript"
+                    );
+                }
+                return Ok::<String, String>(result.corrected_text);
+            }
+        }
+        Ok(display_text)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
 
     // Persist the transcript and mark as Completed — on a blocking thread.
     let db = Arc::clone(&state.db);
