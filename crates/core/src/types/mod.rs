@@ -6,6 +6,7 @@ pub mod stt;
 pub mod tts;
 pub mod rag;
 pub mod settings;
+pub mod vocabulary;
 
 pub use recording::*;
 pub use processing::*;
@@ -15,3 +16,4 @@ pub use stt::*;
 pub use tts::*;
 pub use rag::*;
 pub use settings::*;
+pub use vocabulary::*;
