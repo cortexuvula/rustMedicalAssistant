@@ -64,6 +64,7 @@ export interface AppConfig {
   auto_generate_soap: boolean;
   search_top_k: number;
   mmr_lambda: number;
+  vocabulary_enabled: boolean;
   [key: string]: any;
 }
 

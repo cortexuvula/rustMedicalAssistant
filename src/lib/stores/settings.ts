@@ -10,7 +10,7 @@ const defaults: AppConfig = {
   whisper_model: 'large-v3-turbo',
   tts_provider: 'elevenlabs',
   tts_voice: 'default',
-  temperature: 0.4,
+  temperature: 0.2,
   sample_rate: 44100,
   autosave_enabled: true,
   autosave_interval_secs: 60,
@@ -20,6 +20,7 @@ const defaults: AppConfig = {
   storage_path: null,
   lmstudio_host: 'localhost',
   lmstudio_port: 1234,
+  vocabulary_enabled: true,
 };
 
 function createSettingsStore() {

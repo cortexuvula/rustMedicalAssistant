@@ -107,7 +107,7 @@ fn default_tts_voice() -> String {
 }
 
 fn default_temperature() -> f32 {
-    0.4
+    0.2
 }
 
 fn default_icd_version() -> IcdVersion {
@@ -182,6 +182,10 @@ fn default_lmstudio_port() -> u16 {
     1234
 }
 
+fn default_vocabulary_enabled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------------------
 // AppConfig
 // ---------------------------------------------------------------------------
@@ -235,6 +239,8 @@ pub struct AppConfig {
     pub auto_generate_soap: bool,
     #[serde(default = "default_auto_index_rag")]
     pub auto_index_rag: bool,
+    #[serde(default = "default_vocabulary_enabled")]
+    pub vocabulary_enabled: bool,
     #[serde(default = "default_icd_version")]
     pub icd_version: IcdVersion,
 
@@ -309,7 +315,7 @@ mod tests {
         assert_eq!(config.whisper_model, "large-v3-turbo");
         assert_eq!(config.tts_provider, "elevenlabs");
         assert_eq!(config.tts_voice, "default");
-        assert!((config.temperature - 0.4).abs() < f32::EPSILON);
+        assert!((config.temperature - 0.2).abs() < f32::EPSILON);
         assert!(!config.auto_generate_referral);
         assert!(!config.auto_generate_letter);
         assert!(!config.auto_generate_soap);
@@ -330,6 +336,7 @@ mod tests {
         assert_eq!(config.window_height, 800);
         assert_eq!(config.lmstudio_host, "localhost");
         assert_eq!(config.lmstudio_port, 1234);
+        assert!(config.vocabulary_enabled);
     }
 
     #[test]
