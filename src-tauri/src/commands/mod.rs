@@ -10,6 +10,7 @@ pub mod rag;
 pub mod recordings;
 pub mod settings;
 pub mod transcription;
+pub mod vocabulary;
 
 use std::path::PathBuf;
 

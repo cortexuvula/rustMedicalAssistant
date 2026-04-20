@@ -157,6 +157,15 @@ pub fn run() {
             commands::logging::get_log_path,
             commands::logging::get_recent_logs,
             commands::logging::frontend_log,
+            commands::vocabulary::list_vocabulary_entries,
+            commands::vocabulary::add_vocabulary_entry,
+            commands::vocabulary::update_vocabulary_entry,
+            commands::vocabulary::delete_vocabulary_entry,
+            commands::vocabulary::delete_all_vocabulary_entries,
+            commands::vocabulary::get_vocabulary_count,
+            commands::vocabulary::import_vocabulary_json,
+            commands::vocabulary::export_vocabulary_json,
+            commands::vocabulary::test_vocabulary_correction,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
