@@ -47,6 +47,18 @@ pub enum SoapTemplate {
 
 
 // ---------------------------------------------------------------------------
+// ContextTemplate
+// ---------------------------------------------------------------------------
+
+/// A named snippet of clinical context text the user can apply to the
+/// Patient Context field at recording time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextTemplate {
+    pub name: String,
+    pub body: String,
+}
+
+// ---------------------------------------------------------------------------
 // SoapNoteSettings
 // ---------------------------------------------------------------------------
 
@@ -241,6 +253,8 @@ pub struct AppConfig {
     pub auto_index_rag: bool,
     #[serde(default = "default_vocabulary_enabled")]
     pub vocabulary_enabled: bool,
+    #[serde(default)]
+    pub custom_context_templates: Vec<ContextTemplate>,
     #[serde(default = "default_icd_version")]
     pub icd_version: IcdVersion,
 
@@ -390,6 +404,33 @@ mod tests {
 
         let telehealth: SoapTemplate = serde_json::from_str("\"telehealth\"").unwrap();
         assert_eq!(telehealth, SoapTemplate::Telehealth);
+    }
+
+    #[test]
+    fn context_templates_default_empty() {
+        let config = AppConfig::default();
+        assert!(config.custom_context_templates.is_empty());
+    }
+
+    #[test]
+    fn context_template_round_trip() {
+        let mut config = AppConfig::default();
+        config.custom_context_templates = vec![
+            ContextTemplate { name: "Follow-up".into(), body: "Follow-up visit.".into() },
+            ContextTemplate { name: "Telehealth".into(), body: "Video consult.".into() },
+        ];
+        let json = serde_json::to_string(&config).unwrap();
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.custom_context_templates.len(), 2);
+        assert_eq!(back.custom_context_templates[0].name, "Follow-up");
+        assert_eq!(back.custom_context_templates[1].body, "Video consult.");
+    }
+
+    #[test]
+    fn context_templates_missing_from_json_defaults_empty() {
+        let json = r#"{"ai_provider": "openai"}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert!(config.custom_context_templates.is_empty());
     }
 
 }
