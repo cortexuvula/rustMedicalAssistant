@@ -78,7 +78,7 @@ async fn load_recording_and_settings(
             }
             None => GenerationSettings {
                 model: "gpt-4o".to_string(),
-                temperature: 0.4,
+                temperature: 0.2,
                 icd_version: "ICD-10".to_string(),
                 ai_provider: "openai".to_string(),
                 custom_soap_prompt: None,
@@ -129,12 +129,20 @@ fn parse_soap_template(s: &str) -> SoapTemplate {
     }
 }
 
+fn max_tokens_for_provider(provider: &str) -> Option<u32> {
+    match provider {
+        "lmstudio" | "ollama" => None,
+        _ => Some(4096),
+    }
+}
+
 /// Build a single-turn `CompletionRequest` from system and user prompts.
 fn build_completion_request(
     system_prompt: String,
     user_prompt: String,
     model: String,
     temperature: f32,
+    max_tokens: Option<u32>,
 ) -> CompletionRequest {
     CompletionRequest {
         model,
@@ -144,7 +152,7 @@ fn build_completion_request(
             tool_calls: vec![],
         }],
         temperature: Some(temperature),
-        max_tokens: Some(4096),
+        max_tokens,
         system_prompt: Some(system_prompt),
     }
 }
@@ -231,6 +239,8 @@ async fn generate_soap_inner(
 
     // Build prompts with full config
     let soap_template = template.map(parse_soap_template).unwrap_or_default();
+    let model_name = settings.model.clone();
+    let max_tokens = max_tokens_for_provider(&settings.ai_provider);
     let config = SoapPromptConfig {
         template: soap_template,
         icd_version: settings.icd_version,
@@ -249,12 +259,12 @@ async fn generate_soap_inner(
         context.map(|c| c.len()).unwrap_or(0),
         context.map(|c| &c[..c.len().min(100)]).unwrap_or("(none)"),
     );
-
     let request = build_completion_request(
         system_prompt,
         user_prompt,
         settings.model,
         settings.temperature,
+        max_tokens,
     );
 
     let response = provider
@@ -264,8 +274,17 @@ async fn generate_soap_inner(
 
     let raw_soap = response.content;
     if raw_soap.is_empty() {
-        error!("AI returned an empty SOAP note");
-        return Err("AI returned an empty SOAP note.".into());
+        error!(
+            provider = %provider.name(),
+            model = %model_name,
+            "AI returned an empty SOAP note"
+        );
+        return Err(format!(
+            "AI returned an empty SOAP note (provider: {}, model: {}). \
+             Check that the model is loaded and responding.",
+            provider.name(),
+            model_name,
+        ));
     }
 
     info!(
@@ -384,6 +403,7 @@ async fn generate_referral_inner(
         user_prompt,
         settings.model,
         settings.temperature,
+        max_tokens_for_provider(&settings.ai_provider),
     );
 
     let response = provider
@@ -483,6 +503,7 @@ async fn generate_letter_inner(
         user_prompt,
         settings.model,
         settings.temperature,
+        max_tokens_for_provider(&settings.ai_provider),
     );
 
     let response = provider
@@ -534,6 +555,7 @@ pub async fn generate_synopsis(
         user_prompt,
         settings.model,
         settings.temperature,
+        max_tokens_for_provider(&settings.ai_provider),
     );
 
     let response = provider

@@ -8,6 +8,7 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 use medical_core::{
     error::{AppError, AppResult},
@@ -268,13 +269,34 @@ impl OpenAiCompatibleClient {
             total_tokens: u.total_tokens,
         }).unwrap_or_default();
 
+        let num_choices = resp.choices.len();
         let first_choice = resp.choices.into_iter().next();
+
+        if first_choice.is_none() {
+            warn!(
+                model = %model,
+                "AI response contained no choices (choices array was empty)"
+            );
+        }
+
+        let finish_reason = first_choice
+            .as_ref()
+            .and_then(|c| c.finish_reason.clone());
 
         let content = first_choice
             .as_ref()
             .and_then(|c| c.message.as_ref())
             .and_then(|m| m.content.clone())
             .unwrap_or_default();
+
+        if content.is_empty() && num_choices > 0 {
+            warn!(
+                model = %model,
+                finish_reason = ?finish_reason,
+                has_message = first_choice.as_ref().and_then(|c| c.message.as_ref()).is_some(),
+                "AI response content is empty (choices={num_choices}, finish_reason={finish_reason:?})"
+            );
+        }
 
         let tool_calls = first_choice
             .as_ref()
@@ -338,16 +360,43 @@ impl OpenAiCompatibleClient {
             .await
             .map_err(|e| AppError::AiProvider(e.to_string()))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(AppError::AiProvider(format!("HTTP {status}: {text}")));
+        let status = response.status();
+        let raw_body = response.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            return Err(AppError::AiProvider(format!("HTTP {status}: {raw_body}")));
         }
 
-        let resp: ChatResponse = response
-            .json()
-            .await
-            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+        let resp: ChatResponse = serde_json::from_str(&raw_body)
+            .map_err(|e| {
+                warn!(body_preview = &raw_body[..raw_body.len().min(500)], "Failed to parse AI response JSON");
+                AppError::AiProvider(format!("JSON parse error: {e}"))
+            })?;
+
+        debug!(
+            url = %url,
+            model = %request.model,
+            choices = resp.choices.len(),
+            "AI completion response received"
+        );
+
+        let finish_reason = resp.choices.first()
+            .and_then(|c| c.finish_reason.as_deref())
+            .unwrap_or("unknown");
+        let has_content = resp.choices.first()
+            .and_then(|c| c.message.as_ref())
+            .and_then(|m| m.content.as_ref())
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+
+        if !has_content && finish_reason == "length" {
+            return Err(AppError::AiProvider(format!(
+                "Model '{}' context window exceeded: the prompt is too long for the model, \
+                 leaving no room for output. Try a model with a larger context window, \
+                 reduce the prompt size, or increase the model's context length in LM Studio.",
+                request.model,
+            )));
+        }
 
         Ok(self.parse_response(resp, &request.model))
     }

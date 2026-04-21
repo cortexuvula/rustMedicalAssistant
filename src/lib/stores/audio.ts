@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import * as audioApi from '../api/audio';
 import { log } from '../api/logging';
@@ -24,7 +24,8 @@ const initialState: AudioStoreState = {
 };
 
 function createAudioStore() {
-  const { subscribe, set, update } = writable<AudioStoreState>(initialState);
+  const store = writable<AudioStoreState>(initialState);
+  const { subscribe, set, update } = store;
 
   let timer: ReturnType<typeof setInterval> | null = null;
   let waveformUnlisten: UnlistenFn | null = null;

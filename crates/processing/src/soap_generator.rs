@@ -101,10 +101,13 @@ pub fn build_soap_prompt(config: &SoapPromptConfig) -> String {
     };
 
     // Select template based on provider
-    if config.provider.as_deref() == Some("anthropic") {
-        build_anthropic_prompt(icd_instruction, icd_label, template_instruction)
-    } else {
-        build_generic_prompt(icd_instruction, icd_label, template_instruction)
+    // Both Anthropic and LM Studio use the shorter, example-driven prompt
+    // which works better with local models (shorter context, worked example).
+    match config.provider.as_deref() {
+        Some("anthropic") | Some("lmstudio") => {
+            build_anthropic_prompt(icd_instruction, icd_label, template_instruction)
+        }
+        _ => build_generic_prompt(icd_instruction, icd_label, template_instruction),
     }
 }
 
@@ -117,13 +120,15 @@ fn build_generic_prompt(
     format!(
         r#"You are an experienced general family practice physician creating detailed clinical documentation from patient consultation transcripts.
 
-Your task is to extract ALL clinically relevant information from the transcript and organize it into a comprehensive SOAP note. ACCURACY AND COMPLETENESS ARE CRITICAL - missing information can affect patient care.
+Your task is to extract clinically relevant information from the transcript and organize it into a SOAP note.
+
+ABSOLUTE RULE: Do NOT fabricate, infer, or assume ANY clinical detail that is not explicitly stated in the transcript. If something was not discussed, write "Not discussed" — NEVER guess. It is ALWAYS better to write "Not discussed" than to add information not present in the transcript. Violating this rule compromises patient safety.
 
 Template guidance: {template_instruction}
 
 ## TRANSCRIPT IS THE PRIMARY SOURCE
 
-The transcript is your PRIMARY and AUTHORITATIVE source. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST be grounded in what was actually said during the visit. Do NOT invent, assume, or expand on details not present in the transcript.
+The transcript is your PRIMARY and AUTHORITATIVE source. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST be directly traceable to something actually said during the visit. Do NOT invent, assume, infer, or expand on details not present in the transcript. Do NOT use your medical knowledge to add details the physician did not mention.
 
 ## USING SUPPLEMENTARY BACKGROUND CONTEXT
 
@@ -134,9 +139,9 @@ If supplementary background context is provided, it contains relevant patient hi
 - If context conflicts with transcript content, ALWAYS prefer the transcript (it reflects the current visit)
 - If context mentions conditions, medications, or findings not discussed in the transcript, note them briefly under past history but do NOT feature them in the Assessment or Plan unless the transcript supports it
 
-## CRITICAL EXTRACTION REQUIREMENTS
+## EXTRACTION REQUIREMENTS
 
-IMPORTANT: For EVERY category listed below, you MUST include an entry in your SOAP note. If information was not discussed or mentioned in the transcript, explicitly state "Not discussed during the visit" or "Not mentioned" for that item. DO NOT omit any category.
+For every category listed below, include an entry in your SOAP note. If information was not discussed or mentioned in the transcript, write "Not discussed during the visit" or "Not mentioned" for that item. It is ALWAYS better to write "Not discussed" than to guess or infer. DO NOT omit any category, but DO NOT fabricate content for any category either.
 
 Before writing each section, carefully review the transcript to extract ALL of the following information:
 
@@ -170,14 +175,15 @@ Before writing each section, carefully review the transcript to extract ALL of t
 - Other investigation results
 
 ### Assessment Section - Include:
-- Primary diagnosis with {icd_instruction}
-- Clinical reasoning for the primary diagnosis
-- Severity assessment when applicable
+- Primary diagnosis with {icd_instruction} as stated or discussed during the visit
+- Brief reasoning ONLY if the physician explicitly stated their reasoning in the transcript
+- Severity assessment ONLY if explicitly discussed
 
 ### Differential Diagnosis Section - Include:
-- 2-5 alternative diagnoses to consider
-- Supporting and refuting evidence for each differential
-- Clinical reasoning for ranking
+- ONLY list differential diagnoses that were explicitly mentioned or discussed during the visit
+- If the physician discussed alternative diagnoses, list them with the evidence they cited
+- If no differential diagnoses were discussed, write: "No differential diagnoses were discussed during the visit"
+- Do NOT generate differential diagnoses from your medical knowledge — only document what was actually discussed
 
 ### Plan Section - Document:
 - Medications prescribed (name, dose, frequency, duration, quantity)
@@ -227,13 +233,13 @@ Before finalizing your SOAP note, verify:
 - All symptoms mentioned in the transcript are documented
 - All medications discussed appear in the note (current meds and new prescriptions)
 - Physical examination findings are addressed (documented, unremarkable, deferred, or not performed)
-- Assessment includes primary diagnosis with clinical reasoning
-- Differential Diagnosis section lists 2-5 alternatives with evidence
-- Plan is actionable with specific treatment details
-- Follow up section includes timing and safety netting
+- Assessment includes primary diagnosis as discussed during the visit
+- Differential Diagnosis only contains diagnoses explicitly discussed (or states "Not discussed")
+- Plan is actionable with specific treatment details from the transcript
+- Follow up section includes timing and safety netting as discussed
 - All 7 sections are present ({icd_label}, Subjective, Objective, Assessment, Differential Diagnosis, Plan, Follow up)
-- No information from the transcript was overlooked
 - EVERY section uses dash/bullet format for items
+- CRITICAL: Every fact in the note can be traced back to a specific statement in the transcript. If you cannot point to where something was said, remove it
 
 ## OUTPUT FORMAT
 
@@ -277,7 +283,9 @@ Follow up:
 - [Red flag symptoms]
 
 ** Always return your response in plain text without markdown **
-** Always include ALL sections even if information is limited **"#,
+** Always include ALL sections even if information is limited **
+
+FINAL REMINDER: Your SOAP note must contain ONLY information from the transcript. Do NOT add diagnoses, symptoms, history, medications, or clinical reasoning that were not explicitly stated during the visit. "Not discussed" is always the correct answer when information was not mentioned. Patient safety depends on accuracy, not completeness."#,
         template_instruction = template_instruction,
         icd_instruction = icd_instruction,
         icd_label = icd_label,
@@ -293,10 +301,12 @@ fn build_anthropic_prompt(
     format!(
         r#"You are a physician creating a SOAP note from a patient consultation transcript.
 
+ABSOLUTE RULE: Do NOT fabricate, infer, or assume ANY clinical detail not explicitly stated in the transcript. If something was not discussed, write "Not discussed" — NEVER guess. Patient safety depends on accuracy.
+
 Template guidance: {template_instruction}
 
 TRANSCRIPT IS THE PRIMARY SOURCE:
-The transcript is your main source of truth. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST come from what was actually said during the visit. Do NOT invent or expand on details absent from the transcript.
+The transcript is your main source of truth. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST be directly traceable to something actually said during the visit. Do NOT invent, infer, or expand on details absent from the transcript. Do NOT use your medical knowledge to add details the physician did not mention.
 
 USING SUPPLEMENTARY BACKGROUND CONTEXT:
 If supplementary background is provided, it is SECONDARY to the transcript. Use it only to add past history or visit type context for details not covered in the transcript. Do NOT let it override transcript content. Do NOT elaborate on context details unless the transcript also discusses them. If context conflicts with the transcript, ALWAYS prefer the transcript. Conditions or medications mentioned only in context (not in the transcript) should appear briefly under past history, NOT in the Assessment or Plan.
@@ -310,7 +320,8 @@ STRICT FORMATTING RULES:
 6. Output Clinical Synopsis exactly ONCE at the very end
 7. NO decorative characters anywhere (no === or --- or ***)
 8. Include all 8 sections in order: {icd_label}, Subjective, Objective, Assessment (with {icd_instruction}), Differential Diagnosis, Plan, Follow up, Clinical Synopsis
-9. If information was not discussed, write "- [Category]: Not discussed" - DO NOT omit it
+9. If information was not discussed, write "- [Category]: Not discussed" - DO NOT omit it and DO NOT fabricate content
+10. Differential Diagnosis: ONLY list diagnoses explicitly discussed during the visit. If none were discussed, write "- No differential diagnoses were discussed during the visit"
 
 Your output MUST follow this exact structure with blank lines between sections:
 
@@ -370,7 +381,8 @@ REMEMBER:
 - Clinical Synopsis appears ONCE only at the end
 - NO decorative lines (no === or --- anywhere)
 - Replace VML with Valley Medical Laboratories
-- Say "the patient" never use names"#,
+- Say "the patient" never use names
+- CRITICAL: Every fact must be traceable to the transcript. If it was not said, do not write it. "Not discussed" is always correct when information was not mentioned"#,
         template_instruction = template_instruction,
         icd_instruction = icd_instruction,
         icd_label = icd_label,
@@ -659,7 +671,7 @@ mod tests {
         assert!(prompt.contains("Differential Diagnosis"));
         assert!(prompt.contains("Plan"));
         assert!(prompt.contains("Follow up"));
-        assert!(prompt.contains("CRITICAL EXTRACTION REQUIREMENTS"));
+        assert!(prompt.contains("EXTRACTION REQUIREMENTS"));
         assert!(prompt.contains("Not discussed during the visit"));
         assert!(prompt.contains("QUALITY VERIFICATION"));
     }
