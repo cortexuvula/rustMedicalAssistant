@@ -424,7 +424,6 @@
       if (!confirmed) return;
     }
     activePromptKey = docType;
-    await loadPromptEditor(docType);
   }
 
   async function handlePromptSave() {
@@ -1366,7 +1365,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    border-right: 1px solid var(--border-color);
+    border-right: 1px solid var(--border);
     padding-right: 0.75rem;
   }
 
@@ -1382,12 +1381,12 @@
   }
 
   .prompts-nav-item:hover {
-    background: var(--hover-bg);
+    background: var(--bg-hover);
   }
 
   .prompts-nav-item.active {
-    background: var(--accent-bg);
-    border-color: var(--accent-color);
+    background: var(--accent-light);
+    border-color: var(--accent);
   }
 
   .prompts-editor {
@@ -1402,17 +1401,17 @@
     font-size: 0.85rem;
     line-height: 1.4;
     padding: 0.75rem;
-    background: var(--input-bg);
+    background: var(--bg-input);
     color: var(--text-primary);
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--border);
     border-radius: 6px;
     resize: vertical;
     min-height: 400px;
   }
 
   .prompts-placeholders {
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.5rem 0.75rem;
   }
@@ -1428,7 +1427,7 @@
   }
 
   .prompts-placeholders code {
-    background: var(--code-bg, rgba(128, 128, 128, 0.15));
+    background: var(--bg-code);
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
     font-size: 0.85rem;
@@ -1440,7 +1439,7 @@
   }
 
   .prompts-status .dirty-indicator {
-    color: var(--warning-color, orange);
+    color: var(--warning);
   }
 
   .prompts-actions {
