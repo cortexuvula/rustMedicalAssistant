@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use super::agent::AgentSettings;
 
+/// AI providers supported at runtime. Used by AppConfig::migrate() to reject
+/// stale values left over from older versions of the app.
+pub const SUPPORTED_AI_PROVIDERS: &[&str] = &["lmstudio", "ollama"];
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -319,7 +323,7 @@ impl AppConfig {
     /// Run after deserialization; silently corrects values that are no longer
     /// valid (e.g. cloud provider names left over from older versions).
     pub fn migrate(&mut self) {
-        if !matches!(self.ai_provider.as_str(), "lmstudio" | "ollama") {
+        if !SUPPORTED_AI_PROVIDERS.contains(&self.ai_provider.as_str()) {
             tracing::warn!(
                 stale = %self.ai_provider,
                 "ai_provider migrated to 'lmstudio' (cloud providers are no longer supported)"
@@ -466,11 +470,13 @@ mod tests {
     }
 
     #[test]
-    fn default_ai_provider_migrates_to_lmstudio() {
-        // The default value is "openai" from default_ai_provider() — this must also migrate.
-        let mut config = AppConfig::default();
-        config.migrate();
-        assert_eq!(config.ai_provider, "lmstudio");
+    fn all_legacy_cloud_providers_migrate_to_lmstudio() {
+        for legacy in ["openai", "anthropic", "gemini", "groq", "cerebras"] {
+            let json = format!(r#"{{"ai_provider": "{legacy}"}}"#);
+            let mut config: AppConfig = serde_json::from_str(&json).unwrap();
+            config.migrate();
+            assert_eq!(config.ai_provider, "lmstudio", "Expected '{legacy}' to migrate");
+        }
     }
 
 }
