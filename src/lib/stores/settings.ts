@@ -22,6 +22,10 @@ const defaults: AppConfig = {
   lmstudio_port: 1234,
   vocabulary_enabled: true,
   custom_context_templates: [],
+  custom_soap_prompt: null,
+  custom_referral_prompt: null,
+  custom_letter_prompt: null,
+  custom_synopsis_prompt: null,
 };
 
 function createSettingsStore() {

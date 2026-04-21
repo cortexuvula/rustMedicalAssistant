@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
-  import { listApiKeys, setApiKey, testLmStudioConnection } from '../api/settings';
+  import { testLmStudioConnection } from '../api/settings';
   import { listModels, setActiveProvider, reinitProviders, type ModelInfo } from '../api/chat';
   import { listAudioDevices } from '../api/audio';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -20,25 +20,8 @@
   } from '../api/contextTemplates';
   import { contextTemplates } from '../stores/contextTemplates';
 
-  type Section = 'general' | 'apikeys' | 'models' | 'audio';
+  type Section = 'general' | 'prompts' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
-
-  const API_PROVIDERS = [
-    { id: 'openai', label: 'OpenAI' },
-    { id: 'anthropic', label: 'Anthropic' },
-    { id: 'gemini', label: 'Gemini' },
-    { id: 'groq', label: 'Groq' },
-    { id: 'cerebras', label: 'Cerebras' },
-  ];
-
-  let storedKeys = $state<string[]>([]);
-  let apiKeyInputs = $state<Record<string, string>>({});
-  let saveStatus = $state<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});
-
-  for (const p of API_PROVIDERS) {
-    apiKeyInputs[p.id] = '';
-    saveStatus[p.id] = 'idle';
-  }
 
   let availableModels = $state<ModelInfo[]>([]);
   let modelsLoading = $state(false);
@@ -140,8 +123,7 @@
     if ($settings.ai_provider && $settings.ai_model) {
       modelMemory[$settings.ai_provider] = $settings.ai_model;
     }
-    const [keys] = await Promise.allSettled([
-      listApiKeys(),
+    await Promise.allSettled([
       fetchModelsForProvider($settings.ai_provider),
       fetchAudioDevices(),
       fetchWhisperModels(),
@@ -149,11 +131,6 @@
       loadVocabCount(),
       contextTemplates.load(),
     ]);
-    if (keys.status === 'fulfilled') {
-      storedKeys = keys.value;
-    } else {
-      console.error('Failed to list API keys:', keys.reason);
-    }
 
     // Listen for model download progress events
     progressUnlisten = await listen<{ model_id: string; downloaded_bytes: number; total_bytes: number }>(
@@ -173,28 +150,6 @@
   onDestroy(() => {
     progressUnlisten?.();
   });
-
-  async function handleSaveApiKey(provider: string) {
-    const key = apiKeyInputs[provider]?.trim();
-    if (!key) return;
-
-    saveStatus[provider] = 'saving';
-    try {
-      await setApiKey(provider, key);
-      if (!storedKeys.includes(provider)) {
-        storedKeys = [...storedKeys, provider];
-      }
-      apiKeyInputs[provider] = '';
-      saveStatus[provider] = 'saved';
-      // Rebuild AI + STT provider chains so new keys take effect immediately
-      await reinitProviders();
-      setTimeout(() => { saveStatus[provider] = 'idle'; }, 2000);
-    } catch (err) {
-      console.error(`Failed to save API key for ${provider}:`, err);
-      saveStatus[provider] = 'error';
-      setTimeout(() => { saveStatus[provider] = 'idle'; }, 3000);
-    }
-  }
 
   async function handleThemeChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as 'light' | 'dark';
@@ -385,7 +340,7 @@
 
   const navItems: { id: Section; label: string }[] = [
     { id: 'general', label: 'General' },
-    { id: 'apikeys', label: 'API Keys' },
+    { id: 'prompts', label: 'Prompts' },
     { id: 'models', label: 'AI Models' },
     { id: 'audio', label: 'Audio / STT' },
   ];
@@ -518,44 +473,8 @@
         </div>
       </section>
 
-    {:else if activeSection === 'apikeys'}
-      <section class="settings-section">
-        <h3 class="section-title">API Keys</h3>
-        <p class="section-desc">Keys are stored securely in the system keychain.</p>
-
-        {#each API_PROVIDERS as provider}
-          <div class="form-group api-key-row">
-            <div class="api-key-label-row">
-              <span class="form-label">{provider.label}</span>
-              {#if storedKeys.includes(provider.id)}
-                <span class="badge-stored">Stored</span>
-              {/if}
-            </div>
-            <div class="api-key-input-row">
-              <input
-                type="password"
-                placeholder={storedKeys.includes(provider.id) ? '••••••••••••' : `Enter ${provider.label} API key`}
-                bind:value={apiKeyInputs[provider.id]}
-              />
-              <button
-                class="btn-save"
-                onclick={() => handleSaveApiKey(provider.id)}
-                disabled={!apiKeyInputs[provider.id]?.trim() || saveStatus[provider.id] === 'saving'}
-              >
-                {#if saveStatus[provider.id] === 'saving'}
-                  Saving…
-                {:else if saveStatus[provider.id] === 'saved'}
-                  Saved!
-                {:else if saveStatus[provider.id] === 'error'}
-                  Error
-                {:else}
-                  Save
-                {/if}
-              </button>
-            </div>
-          </div>
-        {/each}
-      </section>
+    {:else if activeSection === 'prompts'}
+      <!-- Prompts tab UI is added in Task 11 -->
 
     {:else if activeSection === 'models'}
       <section class="settings-section">
@@ -1026,57 +945,6 @@
   .btn-refresh:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-
-  .api-key-row {
-    gap: 6px;
-  }
-
-  .api-key-label-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .badge-stored {
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--success);
-    background-color: color-mix(in srgb, var(--success) 15%, transparent);
-    border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
-    border-radius: var(--radius-sm);
-    padding: 1px 6px;
-  }
-
-  .api-key-input-row {
-    display: flex;
-    gap: 8px;
-  }
-
-  .api-key-input-row input {
-    flex: 1;
-  }
-
-  .btn-save {
-    flex-shrink: 0;
-    padding: 6px 14px;
-    background-color: var(--accent);
-    color: var(--text-inverse);
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    font-weight: 500;
-    transition: background-color 0.15s ease, opacity 0.15s ease;
-    white-space: nowrap;
-  }
-
-  .btn-save:hover:not(:disabled) {
-    background-color: var(--accent-hover);
-  }
-
-  .btn-save:disabled {
-    opacity: 0.5;
   }
 
   .value-display {
