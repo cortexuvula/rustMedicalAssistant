@@ -1,7 +1,11 @@
-//! SOAP note prompt generation, pre-processing, and post-processing.
+//! System and user prompt builders for SOAP note generation.
 //!
-//! Ported from the Python Medical-Assistant application to provide the same
-//! comprehensive clinical documentation quality.
+//! The system prompt uses a default template with placeholder tokens
+//! (`{icd_label}`, `{icd_instruction}`, `{template_guidance}`). A user-supplied
+//! `custom_prompt` overrides the default template; placeholders in either are
+//! resolved at generation time via `prompt_resolver::resolve_prompt`.
+
+use std::collections::HashMap;
 
 use chrono::Local;
 use medical_core::types::settings::SoapTemplate;
@@ -9,20 +13,21 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::prompt_resolver::resolve_prompt;
+
 // ---------------------------------------------------------------------------
-// Config
+// Public config
 // ---------------------------------------------------------------------------
 
-/// Configuration for building a SOAP note system prompt.
+/// Inputs to `build_soap_prompt`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoapPromptConfig {
     pub template: SoapTemplate,
+    /// One of "ICD-9", "ICD-10", "both" (case-sensitive).
     pub icd_version: String,
+    /// User-supplied override; empty string is treated as absent.
     pub custom_prompt: Option<String>,
     pub include_context: bool,
-    /// AI provider name — selects the Anthropic-optimised template when "anthropic".
-    #[serde(default)]
-    pub provider: Option<String>,
 }
 
 impl Default for SoapPromptConfig {
@@ -32,361 +37,143 @@ impl Default for SoapPromptConfig {
             icd_version: "ICD-10".into(),
             custom_prompt: None,
             include_context: true,
-            provider: None,
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// ICD code helpers
+// Placeholder resolution
 // ---------------------------------------------------------------------------
 
-/// Returns (instruction text, label template) for the requested ICD version.
-fn icd_code_parts(version: &str) -> (&str, &str) {
+/// Build the placeholder map for the SOAP template.
+fn soap_placeholders(icd_version: &str, template: &SoapTemplate) -> HashMap<&'static str, String> {
+    let (icd_instruction, icd_label) = icd_code_parts(icd_version);
+    let template_guidance = template_guidance_text(template);
+
+    let mut map = HashMap::new();
+    map.insert("icd_instruction", icd_instruction.to_string());
+    map.insert("icd_label", icd_label.to_string());
+    map.insert("template_guidance", template_guidance.to_string());
+    map
+}
+
+fn icd_code_parts(version: &str) -> (&'static str, &'static str) {
     match version {
         "ICD-9" => ("ICD-9 code", "ICD-9 Code: [code]"),
         "both" => (
             "both ICD-9 and ICD-10 codes",
             "ICD-9 Code: [code]\nICD-10 Code: [code]",
         ),
-        // Default to ICD-10
         _ => ("ICD-10 code", "ICD-10 Code: [code]"),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Prompt builders
-// ---------------------------------------------------------------------------
-
-/// Build the system prompt for SOAP note generation.
-///
-/// If `config.custom_prompt` is non-empty it is returned verbatim; otherwise a
-/// comprehensive template is generated — using an Anthropic-optimised variant
-/// when the provider is `"anthropic"`.
-pub fn build_soap_prompt(config: &SoapPromptConfig) -> String {
-    // Use the custom prompt verbatim when provided.
-    if let Some(ref custom) = config.custom_prompt {
-        if !custom.is_empty() {
-            return custom.clone();
-        }
-    }
-
-    let (icd_instruction, icd_label) = icd_code_parts(&config.icd_version);
-
-    let template_instruction = match config.template {
+fn template_guidance_text(template: &SoapTemplate) -> &'static str {
+    match template {
         SoapTemplate::FollowUp => {
-            "Focus on changes since last visit, interval history, and response to current \
-             treatment plan."
+            "Focus on changes since last visit, interval history, and response to current treatment plan."
         }
         SoapTemplate::NewPatient => {
-            "Provide comprehensive history including past medical history, family history, \
-             social history, and review of systems."
+            "Provide comprehensive history including past medical history, family history, social history, and review of systems."
         }
         SoapTemplate::Telehealth => {
-            "Note the limitations of remote examination. Document what was assessed virtually \
-             and any elements requiring in-person follow-up."
+            "Note the limitations of remote examination. Document what was assessed virtually and any elements requiring in-person follow-up."
         }
         SoapTemplate::Emergency => {
-            "Prioritise acute findings. Document chief complaint, vital signs, acute \
-             interventions, and disposition."
+            "Prioritise acute findings. Document chief complaint, vital signs, acute interventions, and disposition."
         }
         SoapTemplate::Pediatric => {
-            "Include developmental milestones, immunisation status, growth parameters, and \
-             age-appropriate screening."
+            "Include developmental milestones, immunisation status, growth parameters, and age-appropriate screening."
         }
         SoapTemplate::Geriatric => {
-            "Address functional status, fall risk assessment, polypharmacy review, cognitive \
-             screening, and social support."
+            "Address functional status, fall risk assessment, polypharmacy review, cognitive screening, and social support."
         }
-    };
-
-    // Select template based on provider
-    // Both Anthropic and LM Studio use the shorter, example-driven prompt
-    // which works better with local models (shorter context, worked example).
-    match config.provider.as_deref() {
-        Some("anthropic") | Some("lmstudio") => {
-            build_anthropic_prompt(icd_instruction, icd_label, template_instruction)
-        }
-        _ => build_generic_prompt(icd_instruction, icd_label, template_instruction),
     }
 }
 
-/// Comprehensive generic SOAP system prompt (matches the Python original).
-fn build_generic_prompt(
-    icd_instruction: &str,
-    icd_label: &str,
-    template_instruction: &str,
-) -> String {
-    format!(
-        r#"You are an experienced general family practice physician creating detailed clinical documentation from patient consultation transcripts.
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-Your task is to extract clinically relevant information from the transcript and organize it into a SOAP note.
+/// The built-in default SOAP system prompt.
+///
+/// Contains three placeholder tokens: `{template_guidance}`, `{icd_label}`,
+/// and `{icd_instruction}`, resolved by `build_soap_prompt`.
+pub fn default_soap_prompt() -> &'static str {
+    r#"You are a physician creating a SOAP note from a patient consultation transcript.
 
-ABSOLUTE RULE: Do NOT fabricate, infer, or assume ANY clinical detail that is not explicitly stated in the transcript. If something was not discussed, write "Not discussed" — NEVER guess. It is ALWAYS better to write "Not discussed" than to add information not present in the transcript. Violating this rule compromises patient safety.
+{template_guidance}
 
-Template guidance: {template_instruction}
+RULES:
 
-## TRANSCRIPT IS THE PRIMARY SOURCE
+1. NEVER fabricate, infer, or assume clinical details not in the transcript. If something was not discussed, write "Not discussed."
+2. The transcript is the sole source of truth. Every clinical finding, symptom, medication, and diagnosis must be directly traceable to something said during the visit.
+3. Do NOT use medical knowledge to add details the physician did not mention.
+4. If supplementary background is provided, it is secondary. Use it only for past history context. Never let it override the transcript. If context conflicts with transcript, prefer the transcript. Conditions or medications from background only (not transcript) go under past history only, never in Assessment or Plan.
+5. Say "the patient" — never use names.
+6. Replace "VML" with "Valley Medical Laboratories."
 
-The transcript is your PRIMARY and AUTHORITATIVE source. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST be directly traceable to something actually said during the visit. Do NOT invent, assume, infer, or expand on details not present in the transcript. Do NOT use your medical knowledge to add details the physician did not mention.
-
-## USING SUPPLEMENTARY BACKGROUND CONTEXT
-
-If supplementary background context is provided, it contains relevant patient history, visit type, or clinical background from the treating physician. It is SECONDARY to the transcript:
-- Use it to add background (e.g., past medical history, reason for visit) ONLY for details not covered in the transcript
-- Do NOT let context details override, replace, or take priority over transcript content
-- Do NOT elaborate on context details unless they are also discussed in the transcript
-- If context conflicts with transcript content, ALWAYS prefer the transcript (it reflects the current visit)
-- If context mentions conditions, medications, or findings not discussed in the transcript, note them briefly under past history but do NOT feature them in the Assessment or Plan unless the transcript supports it
-
-## EXTRACTION REQUIREMENTS
-
-For every category listed below, include an entry in your SOAP note. If information was not discussed or mentioned in the transcript, write "Not discussed during the visit" or "Not mentioned" for that item. It is ALWAYS better to write "Not discussed" than to guess or infer. DO NOT omit any category, but DO NOT fabricate content for any category either.
-
-Before writing each section, carefully review the transcript to extract ALL of the following information:
-
-### Subjective Section - Include ALL of these categories:
-- Chief complaint and presenting symptoms
-- History of present illness (onset, duration, timing, progression)
-- Location, quality, and severity (pain scale 1-10 if mentioned)
-- Aggravating and alleviating factors
-- Associated symptoms (document both positive AND pertinent negatives mentioned)
-- Past medical history (state "Not discussed" if not mentioned)
-- Surgical history (state "Not mentioned" if not discussed)
-- Current medications with dosages (state "No medications discussed" if not mentioned)
-- Allergies - drug and non-drug (state "Allergies not discussed" if not mentioned)
-- Family history (state "Not discussed during the visit" if not mentioned)
-- Social history - smoking, alcohol, occupation, living situation (state "Not discussed" if not mentioned)
-- Review of systems findings discussed (state "No review of systems performed" if not discussed)
-
-### Objective Section - Include ALL of these categories:
-- Vital signs: BP, HR, RR, Temperature, SpO2, Weight (state which were measured; "Vital signs not recorded" if none)
-- General appearance and demeanor
-- Physical examination findings by system (include each system examined OR state "not examined"):
-  - HEENT (Head, Eyes, Ears, Nose, Throat)
-  - Cardiovascular (heart sounds, peripheral pulses, edema)
-  - Respiratory (breath sounds, chest expansion, respiratory effort)
-  - Abdominal (tenderness, bowel sounds, organomegaly)
-  - Musculoskeletal (range of motion, tenderness, swelling)
-  - Neurological (mental status, cranial nerves, motor, sensory, reflexes)
-  - Skin (rashes, lesions, color changes)
-- Laboratory results with values and units (state "No laboratory results reviewed" if none)
-- Imaging findings (state "No imaging discussed" if none)
-- Other investigation results
-
-### Assessment Section - Include:
-- Primary diagnosis with {icd_instruction} as stated or discussed during the visit
-- Brief reasoning ONLY if the physician explicitly stated their reasoning in the transcript
-- Severity assessment ONLY if explicitly discussed
-
-### Differential Diagnosis Section - Include:
-- ONLY list differential diagnoses that were explicitly mentioned or discussed during the visit
-- If the physician discussed alternative diagnoses, list them with the evidence they cited
-- If no differential diagnoses were discussed, write: "No differential diagnoses were discussed during the visit"
-- Do NOT generate differential diagnoses from your medical knowledge — only document what was actually discussed
-
-### Plan Section - Document:
-- Medications prescribed (name, dose, frequency, duration, quantity)
-- Referrals to specialists
-- Investigations ordered (labs, imaging)
-- Patient education provided
-- Lifestyle modifications discussed
-- Side effects discussed (if medications prescribed, state that side effects were discussed and patient advised to consult pharmacist for full medicine review)
-
-### Follow up Section - Document:
-- Follow-up timing and instructions
-- Safety netting advice (when to seek urgent care)
-- Red flag symptoms to watch for
-- When to return sooner
-
-## CONSULTATION TYPE HANDLING
-
-**In-Person Consultation:**
-- Document all physical examination findings
-- If a system was examined but not mentioned in detail, document as "examination unremarkable" for that system
-- If examination was not performed for a relevant system, state "physical examination deferred" with reason if given
-
-**Telehealth/Phone Consultation:**
-- State clearly: "This was a telehealth consultation."
-- Document any patient-reported observations (e.g., "patient reports no visible rash")
-- Note limitations: "Physical examination limited due to telehealth format"
-- Include any visual observations if video call (general appearance, visible symptoms)
-
-**No Physical Examination Mentioned:**
-- State: "Physical examination was not performed during this visit"
-- Focus Objective section on any reported vital signs, lab results, or investigation findings
-
-## FORMATTING REQUIREMENTS
-
-1. Write from a first-person physician perspective
-2. Use plain text only - no markdown headers (no #, ##, **bold**, etc.)
-3. Use dash/bullet notation (-) for EVERY item within each section - this is MANDATORY
-4. Each category must be on its own line with a dash prefix
-5. Replace "VML" with "Valley Medical Laboratories"
-6. Refer to "the patient" - never use patient names
-7. Use "during the visit" rather than "transcript"
-8. Keep sections clearly separated with the section name followed by a colon
-
-## QUALITY VERIFICATION
-
-Before finalizing your SOAP note, verify:
-- All symptoms mentioned in the transcript are documented
-- All medications discussed appear in the note (current meds and new prescriptions)
-- Physical examination findings are addressed (documented, unremarkable, deferred, or not performed)
-- Assessment includes primary diagnosis as discussed during the visit
-- Differential Diagnosis only contains diagnoses explicitly discussed (or states "Not discussed")
-- Plan is actionable with specific treatment details from the transcript
-- Follow up section includes timing and safety netting as discussed
-- All 7 sections are present ({icd_label}, Subjective, Objective, Assessment, Differential Diagnosis, Plan, Follow up)
-- EVERY section uses dash/bullet format for items
-- CRITICAL: Every fact in the note can be traced back to a specific statement in the transcript. If you cannot point to where something was said, remove it
-
-## OUTPUT FORMAT
-
-You MUST use this exact structure with bullet points (-) for all items:
+OUTPUT FORMAT — plain text only, no markdown:
 
 {icd_label}
 
 Subjective:
-- Chief complaint: [complaint]
-- History of present illness: [details]
-- Past medical history: [history or "Not discussed"]
-- Surgical history: [history or "Not mentioned"]
-- Current medications: [list or "No medications discussed"]
-- Allergies: [allergies or "Not discussed"]
-- Family history: [history or "Not discussed during the visit"]
-- Social history: [details or "Not discussed"]
-- Review of systems: [findings or "No review of systems performed"]
-
-Objective:
-- This was a [in-person/telehealth] consultation
-- Vital signs: [values or "Not recorded"]
-- General appearance: [description]
-- Physical examination: [findings by system or limitations stated]
-- Laboratory results: [results or "No laboratory results reviewed"]
-- Imaging: [findings or "No imaging discussed"]
-
-Assessment:
-- [Primary diagnosis with clinical reasoning]
-
-Differential Diagnosis:
-- [Diagnosis 1]: [supporting and refuting evidence]
-- [Diagnosis 2]: [supporting and refuting evidence]
-- [Additional diagnoses as appropriate]
-
-Plan:
-- [Each item on its own line with dash]
-
-Follow up:
-- [Timing and instructions]
-- [Safety netting advice]
-- [Red flag symptoms]
-
-** Always return your response in plain text without markdown **
-** Always include ALL sections even if information is limited **
-
-FINAL REMINDER: Your SOAP note must contain ONLY information from the transcript. Do NOT add diagnoses, symptoms, history, medications, or clinical reasoning that were not explicitly stated during the visit. "Not discussed" is always the correct answer when information was not mentioned. Patient safety depends on accuracy, not completeness."#,
-        template_instruction = template_instruction,
-        icd_instruction = icd_instruction,
-        icd_label = icd_label,
-    )
-}
-
-/// Anthropic/Claude-specific SOAP prompt with explicit formatting and worked example.
-fn build_anthropic_prompt(
-    icd_instruction: &str,
-    icd_label: &str,
-    template_instruction: &str,
-) -> String {
-    format!(
-        r#"You are a physician creating a SOAP note from a patient consultation transcript.
-
-ABSOLUTE RULE: Do NOT fabricate, infer, or assume ANY clinical detail not explicitly stated in the transcript. If something was not discussed, write "Not discussed" — NEVER guess. Patient safety depends on accuracy.
-
-Template guidance: {template_instruction}
-
-TRANSCRIPT IS THE PRIMARY SOURCE:
-The transcript is your main source of truth. Every clinical finding, symptom, medication, and diagnosis in the SOAP note MUST be directly traceable to something actually said during the visit. Do NOT invent, infer, or expand on details absent from the transcript. Do NOT use your medical knowledge to add details the physician did not mention.
-
-USING SUPPLEMENTARY BACKGROUND CONTEXT:
-If supplementary background is provided, it is SECONDARY to the transcript. Use it only to add past history or visit type context for details not covered in the transcript. Do NOT let it override transcript content. Do NOT elaborate on context details unless the transcript also discusses them. If context conflicts with the transcript, ALWAYS prefer the transcript. Conditions or medications mentioned only in context (not in the transcript) should appear briefly under past history, NOT in the Assessment or Plan.
-
-STRICT FORMATTING RULES:
-1. Plain text only - NO markdown (no **, no ##, no ---, no ===)
-2. Section headers: plain text followed by colon (e.g., Subjective:)
-3. Every content line starts with a dash (-)
-4. ONE BLANK LINE between each section for paragraph separation
-5. Assessment = ONE cohesive paragraph starting with single dash
-6. Output Clinical Synopsis exactly ONCE at the very end
-7. NO decorative characters anywhere (no === or --- or ***)
-8. Include all 8 sections in order: {icd_label}, Subjective, Objective, Assessment (with {icd_instruction}), Differential Diagnosis, Plan, Follow up, Clinical Synopsis
-9. If information was not discussed, write "- [Category]: Not discussed" - DO NOT omit it and DO NOT fabricate content
-10. Differential Diagnosis: ONLY list diagnoses explicitly discussed during the visit. If none were discussed, write "- No differential diagnoses were discussed during the visit"
-
-Your output MUST follow this exact structure with blank lines between sections:
-
-{icd_label}
-
-Subjective:
-- Chief complaint: Patient presents for follow-up of diabetes management
-- History of present illness: The patient is being followed for type 2 diabetes mellitus. Recent A1C is 8.6%, improved from previous 11%. Patient reports difficulty with medication adherence, particularly the evening dose.
-- Past medical history: Hypertension, type 2 diabetes mellitus, ischemic heart disease
-- Surgical history: Pacemaker insertion; other surgical history not mentioned
+- Chief complaint: [from transcript]
+- History of present illness: [from transcript]
+- Past medical history: [from transcript or background]
+- Surgical history: [from transcript or "Not discussed"]
 - Current medications:
-  - Metformin 1000mg twice daily
-  - Lisinopril 10mg once daily
-  - Aspirin 81mg once daily
-- Allergies: Not discussed
-- Family history: Not discussed during the visit
-- Social history: Not discussed
-- Review of systems: No review of systems performed
+  - [medication 1]
+  - [medication 2]
+- Allergies: [from transcript or "Not discussed"]
+- Family history: [from transcript or "Not discussed"]
+- Social history: [from transcript or "Not discussed"]
+- Review of systems: [from transcript or "Not performed"]
 
 Objective:
-- This was a telehealth consultation
-- Vital signs: Not recorded
-- General appearance: Patient able to communicate clearly and participate in discussion
-- Physical examination: Physical examination limited due to telehealth format
-- Laboratory results: Most recent A1C is 8.6% (previously 11%)
-- Imaging: No imaging discussed
+- [Visit type, e.g., telehealth or in-person]
+- Vital signs: [from transcript or "Not recorded"]
+- General appearance: [from transcript]
+- Physical examination: [from transcript or "limited due to telehealth format"]
+- Laboratory results: [from transcript or "No new labs discussed"]
+- Imaging: [from transcript or "No imaging discussed"]
 
 Assessment:
-- Type 2 diabetes mellitus, suboptimally controlled (A1C 8.6%), improved from previous but still above target. Suboptimal control likely related to poor adherence to evening medication dose. Patient has multiple comorbidities including hypertension and ischemic heart disease. Will optimize medication regimen to improve adherence.
+- [ONE cohesive paragraph summarizing diagnoses, clinical status, and reasoning. Include {icd_instruction} inline. Not broken into sub-items.]
 
 Differential Diagnosis:
-- Poorly controlled type 2 diabetes mellitus: Supported by elevated A1C and reported medication nonadherence; no evidence of new endocrinopathy
-- Medication nonadherence: Patient reports difficulty with evening dose; this is likely contributing to suboptimal glycemic control
-- Secondary causes of hyperglycemia: No new medications reported that would worsen glucose control
+- [Only diagnoses explicitly discussed during the visit. If none discussed: "- No differential diagnoses were discussed during the visit"]
 
 Plan:
-- Switch to extended-release metformin 2000mg once daily to improve adherence
-- Re-prescribe all active medications
-- Send standing order for diabetes labs to Valley Medical Laboratories for follow-up in three months
-- Patient education provided regarding importance of medication adherence
-- Advised patient to monitor for side effects and consult pharmacist for full medication review
+- [Each intervention as a separate dash line]
 
 Follow up:
-- Follow-up in three months after repeat labs to reassess glycemic control and medication adherence
-- Seek urgent care for: severe hyperglycemia (polyuria, polydipsia, confusion), hypoglycemia (shakiness, sweating), or chest pain
-- Red flags: chest pain, palpitations, severe dizziness, confusion, signs of infection
-- Return sooner if difficulty tolerating new medication regimen or experiencing side effects
+- [Follow-up timeline and instructions]
+- [Seek urgent care for: specific red flags from transcript]
+- [Return sooner if: conditions from transcript]
 
 Clinical Synopsis:
-- Patient with type 2 diabetes presented for follow-up with A1C improved from 11% to 8.6% but still above target due to medication nonadherence. Switched to extended-release metformin once daily to improve adherence. Follow-up in three months with repeat labs.
+- [One-paragraph summary of visit. Output this exactly once, at the very end.]
 
-REMEMBER:
-- Start EVERY content line with a dash (-)
+FORMATTING RULES:
+- Every content line starts with dash (-)
 - Include ALL categories even if "Not discussed"
-- ONE blank line between each section
-- Assessment = ONE cohesive paragraph (not broken into sub-items)
-- Clinical Synopsis appears ONCE only at the end
-- NO decorative lines (no === or --- anywhere)
-- Replace VML with Valley Medical Laboratories
-- Say "the patient" never use names
-- CRITICAL: Every fact must be traceable to the transcript. If it was not said, do not write it. "Not discussed" is always correct when information was not mentioned"#,
-        template_instruction = template_instruction,
-        icd_instruction = icd_instruction,
-        icd_label = icd_label,
-    )
+- One blank line between sections
+- Assessment is ONE paragraph, not sub-items
+- No decorative characters (no ===, ---, ***, ##)
+- Plain text section headers followed by colon"#
+}
+
+/// Build the SOAP system prompt: select template (custom or default), then resolve placeholders.
+pub fn build_soap_prompt(config: &SoapPromptConfig) -> String {
+    let template = config
+        .custom_prompt
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| default_soap_prompt());
+
+    let placeholders = soap_placeholders(&config.icd_version, &config.template);
+    resolve_prompt(template, &placeholders)
 }
 
 // ---------------------------------------------------------------------------
@@ -661,41 +448,86 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_prompt_includes_extraction_requirements() {
+    fn default_soap_prompt_has_structure_markers() {
         let config = SoapPromptConfig::default();
         let prompt = build_soap_prompt(&config);
-        assert!(prompt.contains("ICD-10"));
+        // Core section markers
         assert!(prompt.contains("Subjective"));
         assert!(prompt.contains("Objective"));
         assert!(prompt.contains("Assessment"));
         assert!(prompt.contains("Differential Diagnosis"));
         assert!(prompt.contains("Plan"));
         assert!(prompt.contains("Follow up"));
-        assert!(prompt.contains("EXTRACTION REQUIREMENTS"));
-        assert!(prompt.contains("Not discussed during the visit"));
-        assert!(prompt.contains("QUALITY VERIFICATION"));
-    }
-
-    #[test]
-    fn anthropic_prompt_has_example() {
-        let config = SoapPromptConfig {
-            provider: Some("anthropic".into()),
-            ..Default::default()
-        };
-        let prompt = build_soap_prompt(&config);
         assert!(prompt.contains("Clinical Synopsis"));
-        assert!(prompt.contains("Metformin"));
-        assert!(prompt.contains("STRICT FORMATTING RULES"));
+        // Rules section
+        assert!(prompt.contains("RULES:"));
+        assert!(prompt.contains("FORMATTING RULES"));
     }
 
     #[test]
-    fn custom_prompt_overrides() {
+    fn default_soap_prompt_resolves_icd9() {
         let config = SoapPromptConfig {
-            custom_prompt: Some("My custom prompt".into()),
+            icd_version: "ICD-9".into(),
             ..Default::default()
         };
         let prompt = build_soap_prompt(&config);
-        assert_eq!(prompt, "My custom prompt");
+        assert!(prompt.contains("ICD-9 Code: [code]"));
+        assert!(!prompt.contains("{icd_label}"));
+        assert!(!prompt.contains("{icd_instruction}"));
+    }
+
+    #[test]
+    fn default_soap_prompt_resolves_icd10() {
+        let config = SoapPromptConfig {
+            icd_version: "ICD-10".into(),
+            ..Default::default()
+        };
+        let prompt = build_soap_prompt(&config);
+        assert!(prompt.contains("ICD-10 Code: [code]"));
+    }
+
+    #[test]
+    fn default_soap_prompt_resolves_both_icd() {
+        let config = SoapPromptConfig {
+            icd_version: "both".into(),
+            ..Default::default()
+        };
+        let prompt = build_soap_prompt(&config);
+        assert!(prompt.contains("ICD-9 Code: [code]"));
+        assert!(prompt.contains("ICD-10 Code: [code]"));
+    }
+
+    #[test]
+    fn default_soap_prompt_includes_template_guidance() {
+        let config = SoapPromptConfig {
+            template: SoapTemplate::NewPatient,
+            ..Default::default()
+        };
+        let prompt = build_soap_prompt(&config);
+        assert!(prompt.contains("comprehensive history"));
+    }
+
+    #[test]
+    fn custom_soap_prompt_overrides_default() {
+        let config = SoapPromptConfig {
+            custom_prompt: Some("My custom template with {icd_label}".into()),
+            icd_version: "ICD-9".into(),
+            ..Default::default()
+        };
+        let prompt = build_soap_prompt(&config);
+        // Custom template is used, and placeholders are still resolved
+        assert!(prompt.starts_with("My custom template with ICD-9 Code: [code]"));
+    }
+
+    #[test]
+    fn empty_custom_prompt_falls_back_to_default() {
+        let config = SoapPromptConfig {
+            custom_prompt: Some("".into()),
+            ..Default::default()
+        };
+        let prompt = build_soap_prompt(&config);
+        // Empty string should not be treated as a real custom prompt
+        assert!(prompt.contains("You are a physician creating a SOAP note"));
     }
 
     #[test]
@@ -738,26 +570,6 @@ mod tests {
         assert!(gp.contains("functional status"));
         assert!(gp.contains("fall risk"));
         assert!(gp.contains("polypharmacy"));
-    }
-
-    #[test]
-    fn icd_9_variant() {
-        let config = SoapPromptConfig {
-            icd_version: "ICD-9".into(),
-            ..Default::default()
-        };
-        let prompt = build_soap_prompt(&config);
-        assert!(prompt.contains("ICD-9 code"));
-    }
-
-    #[test]
-    fn both_icd_variant() {
-        let config = SoapPromptConfig {
-            icd_version: "both".into(),
-            ..Default::default()
-        };
-        let prompt = build_soap_prompt(&config);
-        assert!(prompt.contains("both ICD-9 and ICD-10 codes"));
     }
 
     #[test]

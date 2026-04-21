@@ -248,7 +248,6 @@ async fn generate_soap_inner(
         icd_version: settings.icd_version,
         custom_prompt: settings.custom_soap_prompt,
         include_context: true,
-        provider: Some(settings.ai_provider),
     };
 
     let system_prompt = soap_generator::build_soap_prompt(&config);
