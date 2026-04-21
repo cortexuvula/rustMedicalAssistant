@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::state::{self, AppState};
 
-/// Re-read API keys from storage and rebuild AI + STT provider registries.
+/// Rebuild AI + STT provider registries (e.g. after LM Studio host/port changes).
 ///
 /// Returns the list of available AI provider names after reinitialization.
 #[tauri::command]
@@ -21,7 +21,7 @@ pub async fn reinit_providers(
     };
 
     // Rebuild AI providers with current config (includes LM Studio host/port)
-    let mut ai_registry = state::init_ai_providers(&state.keys, &config);
+    let mut ai_registry = state::init_ai_providers(&config);
 
     // Restore the user's active provider preference from saved settings
     // so reinit doesn't silently switch to a random provider.

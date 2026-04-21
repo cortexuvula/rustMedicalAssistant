@@ -4,11 +4,6 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::info;
 
-use medical_ai_providers::openai::OpenAiProvider;
-use medical_ai_providers::anthropic::AnthropicProvider;
-use medical_ai_providers::gemini::GeminiProvider;
-use medical_ai_providers::groq::GroqProvider;
-use medical_ai_providers::cerebras::CerebrasProvider;
 use medical_ai_providers::ollama::OllamaProvider;
 use medical_ai_providers::lmstudio::LmStudioProvider;
 use medical_ai_providers::ProviderRegistry;
@@ -77,39 +72,12 @@ pub struct AppState {
     pub ingestion: Arc<IngestionPipeline>,
 }
 
-/// Read saved API keys and register all available AI providers.
-pub fn init_ai_providers(keys: &KeyStorage, config: &AppConfig) -> ProviderRegistry {
+/// Register all supported AI providers (LM Studio + Ollama).
+///
+/// Both providers are local and keyless; `config` supplies LM Studio's
+/// host/port.
+pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     let mut registry = ProviderRegistry::new();
-
-    // OpenAI
-    if let Ok(Some(key)) = keys.get_key("openai") {
-        info!("Registering OpenAI provider");
-        registry.register(Arc::new(OpenAiProvider::new(&key)));
-    }
-
-    // Anthropic
-    if let Ok(Some(key)) = keys.get_key("anthropic") {
-        info!("Registering Anthropic provider");
-        registry.register(Arc::new(AnthropicProvider::new(&key)));
-    }
-
-    // Gemini
-    if let Ok(Some(key)) = keys.get_key("gemini") {
-        info!("Registering Gemini provider");
-        registry.register(Arc::new(GeminiProvider::new(&key)));
-    }
-
-    // Groq
-    if let Ok(Some(key)) = keys.get_key("groq") {
-        info!("Registering Groq provider");
-        registry.register(Arc::new(GroqProvider::new(&key)));
-    }
-
-    // Cerebras
-    if let Ok(Some(key)) = keys.get_key("cerebras") {
-        info!("Registering Cerebras provider");
-        registry.register(Arc::new(CerebrasProvider::new(&key)));
-    }
 
     // Ollama — always available (local, no key needed)
     info!("Registering Ollama provider (local)");
@@ -168,7 +136,7 @@ impl AppState {
         let config_ref = config.as_ref().cloned().unwrap_or_default();
 
         // Initialize provider registries from saved API keys + config
-        let mut ai_providers = init_ai_providers(&keys, &config_ref);
+        let mut ai_providers = init_ai_providers(&config_ref);
 
         let whisper_model = config.as_ref()
             .map(|c| c.whisper_model.as_str())

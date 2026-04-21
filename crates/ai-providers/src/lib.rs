@@ -1,11 +1,6 @@
 pub mod http_client;
 pub mod sse;
 pub mod openai_compat;
-pub mod openai;
-pub mod anthropic;
-pub mod gemini;
-pub mod groq;
-pub mod cerebras;
 pub mod ollama;
 pub mod lmstudio;
 
