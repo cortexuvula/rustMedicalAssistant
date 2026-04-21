@@ -388,7 +388,7 @@ async fn generate_referral_inner(
     let urg = urgency.unwrap_or("routine");
 
     let (system_prompt, user_prompt) =
-        document_generator::build_referral_prompt(soap_note, recipient, urg);
+        document_generator::build_referral_prompt(soap_note, recipient, urg, None);
 
     debug!(
         "generate_referral: provider='{}', recording='{}', recipient='{}', urgency='{}'",
@@ -489,7 +489,7 @@ async fn generate_letter_inner(
     let ltype = letter_type.unwrap_or("follow-up");
 
     let (system_prompt, user_prompt) =
-        document_generator::build_letter_prompt(soap_note, ltype);
+        document_generator::build_letter_prompt(soap_note, ltype, None);
 
     debug!(
         "generate_letter: provider='{}', recording='{}', letter_type='{}'",
@@ -542,7 +542,7 @@ pub async fn generate_synopsis(
         .filter(|s| !s.is_empty())
         .ok_or("Recording has no SOAP note. Generate a SOAP note first.")?;
 
-    let (system_prompt, user_prompt) = document_generator::build_synopsis_prompt(soap_note);
+    let (system_prompt, user_prompt) = document_generator::build_synopsis_prompt(soap_note, None);
 
     debug!(
         "generate_synopsis: provider='{}', recording='{}'",

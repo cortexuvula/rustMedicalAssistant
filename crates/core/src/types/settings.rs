@@ -271,6 +271,8 @@ pub struct AppConfig {
     pub custom_referral_prompt: Option<String>,
     #[serde(default)]
     pub custom_letter_prompt: Option<String>,
+    #[serde(default)]
+    pub custom_synopsis_prompt: Option<String>,
 
     // RAG
     #[serde(default = "default_embedding_model")]
