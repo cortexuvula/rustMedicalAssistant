@@ -46,10 +46,8 @@ export interface RecordingSummary {
 
 // ── Context Template ──────────────────────────────────────────────────────────
 
-export interface ContextTemplate {
-  name: string;
-  body: string;
-}
+export type { ContextTemplate } from '../api/contextTemplates';
+import type { ContextTemplate } from '../api/contextTemplates';
 
 // ── App Config ────────────────────────────────────────────────────────────────
 
