@@ -1,11 +1,11 @@
 <script lang="ts">
   import {
-    listContextTemplates,
     upsertContextTemplate,
     renameContextTemplate,
     deleteContextTemplate,
     type ContextTemplate,
   } from '../api/contextTemplates';
+  import { contextTemplates } from '../stores/contextTemplates';
 
   interface Props {
     open: boolean;
@@ -14,7 +14,6 @@
 
   let { open, onclose }: Props = $props();
 
-  let templates = $state<ContextTemplate[]>([]);
   let loading = $state(false);
   let searchText = $state('');
 
@@ -28,18 +27,16 @@
   async function loadTemplates() {
     loading = true;
     try {
-      templates = await listContextTemplates();
-    } catch (err) {
-      console.error('Failed to load templates:', err);
+      await contextTemplates.load();
     } finally {
       loading = false;
     }
   }
 
   function filtered(): ContextTemplate[] {
-    if (!searchText.trim()) return templates;
+    if (!searchText.trim()) return $contextTemplates;
     const q = searchText.toLowerCase();
-    return templates.filter(
+    return $contextTemplates.filter(
       (t) => t.name.toLowerCase().includes(q) || t.body.toLowerCase().includes(q),
     );
   }
@@ -78,7 +75,7 @@
         }
         await upsertContextTemplate(name, body);
       } else {
-        if (templates.some((t) => t.name === name)) {
+        if ($contextTemplates.some((t) => t.name === name)) {
           formError = `A template named "${name}" already exists.`;
           return;
         }
@@ -158,7 +155,7 @@
             <p class="loading-text">Loading...</p>
           {:else if filtered().length === 0}
             <p class="empty-text">
-              {templates.length === 0 ? 'No templates yet. Click "+ Add Template" to create one.' : 'No templates match the search.'}
+              {$contextTemplates.length === 0 ? 'No templates yet. Click "+ Add Template" to create one.' : 'No templates match the search.'}
             </p>
           {:else}
             <table class="ct-table">
@@ -188,7 +185,7 @@
 
       <div class="ct-footer">
         <span class="footer-count">
-          {filtered().length} shown{searchText ? ` of ${templates.length}` : ''}
+          {filtered().length} shown{searchText ? ` of ${$contextTemplates.length}` : ''}
         </span>
       </div>
     </div>

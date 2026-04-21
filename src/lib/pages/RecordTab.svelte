@@ -8,18 +8,14 @@
   import RecordingHeader from '../components/RecordingHeader.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount } from 'svelte';
-  import {
-    listContextTemplates,
-    upsertContextTemplate,
-    type ContextTemplate,
-  } from '../api/contextTemplates';
+  import { upsertContextTemplate } from '../api/contextTemplates';
+  import { contextTemplates } from '../stores/contextTemplates';
 
   // Context panel state
   let contextText = $state('');
   let contextCollapsed = $state(true);
 
   // Template picker state
-  let templates = $state<ContextTemplate[]>([]);
   let selectedTemplate = $state('');
 
   // Save-as-template modal state
@@ -28,17 +24,9 @@
   let saveModalError = $state('');
   let saveModalOverwriteConfirm = $state(false);
 
-  async function loadTemplates() {
-    try {
-      templates = await listContextTemplates();
-    } catch (err) {
-      console.error('Failed to load templates:', err);
-    }
-  }
-
   function applyTemplate(name: string) {
     if (!name) return;
-    const t = templates.find((x) => x.name === name);
+    const t = $contextTemplates.find((x) => x.name === name);
     if (!t) return;
     if (contextText.trim() === '') {
       contextText = t.body;
@@ -71,7 +59,7 @@
       saveModalError = 'Name is required.';
       return;
     }
-    const exists = templates.some((t) => t.name === name);
+    const exists = $contextTemplates.some((t) => t.name === name);
     if (exists && !saveModalOverwriteConfirm) {
       saveModalOverwriteConfirm = true;
       saveModalError = `A template named "${name}" exists. Click Save again to overwrite.`;
@@ -79,7 +67,7 @@
     }
     try {
       await upsertContextTemplate(name, contextText);
-      await loadTemplates();
+      await contextTemplates.load();
       closeSaveModal();
     } catch (err: any) {
       saveModalError = err?.toString() || 'Failed to save template.';
@@ -87,7 +75,7 @@
   }
 
   onMount(() => {
-    loadTemplates();
+    contextTemplates.load();
   });
 
   // Import flow state
@@ -205,12 +193,12 @@
           class="template-picker"
           bind:value={selectedTemplate}
           onchange={() => applyTemplate(selectedTemplate)}
-          disabled={templates.length === 0}
+          disabled={$contextTemplates.length === 0}
         >
           <option value="">
-            {templates.length === 0 ? 'No templates saved' : 'Apply template…'}
+            {$contextTemplates.length === 0 ? 'No templates saved' : 'Apply template…'}
           </option>
-          {#each templates as t (t.name)}
+          {#each $contextTemplates as t (t.name)}
             <option value={t.name}>{t.name}</option>
           {/each}
         </select>

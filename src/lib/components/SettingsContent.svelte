@@ -15,10 +15,10 @@
   import { save as saveDialog } from '@tauri-apps/plugin-dialog';
   import ContextTemplateDialog from './ContextTemplateDialog.svelte';
   import {
-    listContextTemplates,
     importContextTemplatesJson,
     exportContextTemplatesJson,
   } from '../api/contextTemplates';
+  import { contextTemplates } from '../stores/contextTemplates';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -58,7 +58,7 @@
   let vocabDialogOpen = $state(false);
   let vocabCount = $state<[number, number]>([0, 0]);
   let ctxTemplateDialogOpen = $state(false);
-  let ctxTemplateCount = $state(0);
+  let ctxTemplateCount = $derived($contextTemplates.length);
 
   async function fetchAudioDevices() {
     devicesLoading = true;
@@ -147,7 +147,7 @@
       fetchWhisperModels(),
       fetchPyannoteModels(),
       loadVocabCount(),
-      loadCtxTemplateCount(),
+      contextTemplates.load(),
     ]);
     if (keys.status === 'fulfilled') {
       storedKeys = keys.value;
@@ -275,15 +275,6 @@
     loadVocabCount();
   }
 
-  async function loadCtxTemplateCount() {
-    try {
-      const list = await listContextTemplates();
-      ctxTemplateCount = list.length;
-    } catch (err) {
-      console.error('Failed to load context template count:', err);
-    }
-  }
-
   async function handleImportCtxTemplates() {
     const selected = await openDialog({
       multiple: false,
@@ -294,7 +285,7 @@
       try {
         const count = await importContextTemplatesJson(selected as string);
         alert(`Imported ${count} context templates.`);
-        await loadCtxTemplateCount();
+        await contextTemplates.load();
       } catch (err: any) {
         alert(`Import failed: ${err}`);
       }
@@ -319,7 +310,6 @@
 
   function handleCtxTemplateDialogClose() {
     ctxTemplateDialogOpen = false;
-    loadCtxTemplateCount();
   }
 
   async function handleAiProviderChange(e: Event) {
