@@ -166,6 +166,12 @@ pub fn run() {
             commands::vocabulary::import_vocabulary_json,
             commands::vocabulary::export_vocabulary_json,
             commands::vocabulary::test_vocabulary_correction,
+            commands::context_templates::list_context_templates,
+            commands::context_templates::upsert_context_template,
+            commands::context_templates::rename_context_template,
+            commands::context_templates::delete_context_template,
+            commands::context_templates::import_context_templates_json,
+            commands::context_templates::export_context_templates_json,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

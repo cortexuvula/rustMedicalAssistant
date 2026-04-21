@@ -126,6 +126,116 @@ pub fn export_json(templates: &[ContextTemplate]) -> String {
     .expect("serialising context templates should never fail")
 }
 
+use medical_db::settings::SettingsRepo;
+use tracing::{info, instrument};
+
+use crate::state::AppState;
+
+fn load_config(state: &tauri::State<'_, AppState>) -> Result<medical_core::types::settings::AppConfig, String> {
+    let conn = state.db.conn().map_err(|e| e.to_string())?;
+    SettingsRepo::load_config(&conn).map_err(|e| e.to_string())
+}
+
+fn save_config(
+    state: &tauri::State<'_, AppState>,
+    config: &medical_core::types::settings::AppConfig,
+) -> Result<(), String> {
+    let conn = state.db.conn().map_err(|e| e.to_string())?;
+    SettingsRepo::save_config(&conn, config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_context_templates(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ContextTemplate>, String> {
+    let config = load_config(&state)?;
+    let mut templates = config.custom_context_templates;
+    sort_templates(&mut templates);
+    Ok(templates)
+}
+
+#[tauri::command]
+pub fn upsert_context_template(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    body: String,
+) -> Result<ContextTemplate, String> {
+    let name = name.trim().to_string();
+    let body = body.trim().to_string();
+    if name.is_empty() {
+        return Err("Template name cannot be empty".into());
+    }
+    if body.is_empty() {
+        return Err("Template body cannot be empty".into());
+    }
+    let mut config = load_config(&state)?;
+    let result = upsert_into(&mut config.custom_context_templates, name, body);
+    save_config(&state, &config)?;
+    info!(name = %result.name, "Upserted context template");
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn rename_context_template(
+    state: tauri::State<'_, AppState>,
+    old_name: String,
+    new_name: String,
+) -> Result<ContextTemplate, String> {
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Err("Template name cannot be empty".into());
+    }
+    let mut config = load_config(&state)?;
+    let result = rename_in(&mut config.custom_context_templates, &old_name, new_name)?;
+    save_config(&state, &config)?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn delete_context_template(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<(), String> {
+    let mut config = load_config(&state)?;
+    delete_in(&mut config.custom_context_templates, &name)?;
+    save_config(&state, &config)?;
+    info!(name, "Deleted context template");
+    Ok(())
+}
+
+#[tauri::command]
+#[instrument(skip(state))]
+pub async fn import_context_templates_json(
+    state: tauri::State<'_, AppState>,
+    file_path: String,
+) -> Result<u32, String> {
+    let content = tokio::fs::read_to_string(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+    let imported = parse_import_json(&content)?;
+    let mut config = load_config(&state)?;
+    let count = apply_import(&mut config.custom_context_templates, imported);
+    save_config(&state, &config)?;
+    info!(count, path = %file_path, "Imported context templates");
+    Ok(count)
+}
+
+#[tauri::command]
+#[instrument(skip(state))]
+pub async fn export_context_templates_json(
+    state: tauri::State<'_, AppState>,
+    file_path: String,
+) -> Result<u32, String> {
+    let config = load_config(&state)?;
+    let count = config.custom_context_templates.len() as u32;
+    let json = export_json(&config.custom_context_templates);
+    tokio::fs::write(&file_path, json)
+        .await
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+    info!(count, path = %file_path, "Exported context templates");
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
