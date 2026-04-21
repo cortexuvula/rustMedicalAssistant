@@ -21,6 +21,7 @@ const defaults: AppConfig = {
   lmstudio_host: 'localhost',
   lmstudio_port: 1234,
   vocabulary_enabled: true,
+  custom_context_templates: [],
 };
 
 function createSettingsStore() {

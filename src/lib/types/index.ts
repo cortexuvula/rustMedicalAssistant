@@ -44,6 +44,13 @@ export interface RecordingSummary {
   has_letter: boolean;
 }
 
+// ── Context Template ──────────────────────────────────────────────────────────
+
+export interface ContextTemplate {
+  name: string;
+  body: string;
+}
+
 // ── App Config ────────────────────────────────────────────────────────────────
 
 export interface AppConfig {
@@ -65,6 +72,7 @@ export interface AppConfig {
   search_top_k: number;
   mmr_lambda: number;
   vocabulary_enabled: boolean;
+  custom_context_templates: ContextTemplate[];
   [key: string]: any;
 }
 
