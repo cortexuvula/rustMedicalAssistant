@@ -123,7 +123,7 @@
     if ($settings.ai_provider && $settings.ai_model) {
       modelMemory[$settings.ai_provider] = $settings.ai_model;
     }
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       fetchModelsForProvider($settings.ai_provider),
       fetchAudioDevices(),
       fetchWhisperModels(),
@@ -131,6 +131,12 @@
       loadVocabCount(),
       contextTemplates.load(),
     ]);
+    const labels = ['fetchModelsForProvider', 'fetchAudioDevices', 'fetchWhisperModels', 'fetchPyannoteModels', 'loadVocabCount', 'contextTemplates.load'];
+    for (const [i, r] of results.entries()) {
+      if (r.status === 'rejected') {
+        console.error(`Settings init: ${labels[i]} failed:`, r.reason);
+      }
+    }
 
     // Listen for model download progress events
     progressUnlisten = await listen<{ model_id: string; downloaded_bytes: number; total_bytes: number }>(
