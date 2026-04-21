@@ -99,7 +99,7 @@ fn default_channels() -> u16 {
 }
 
 fn default_ai_provider() -> String {
-    "openai".into()
+    "lmstudio".into()
 }
 
 fn default_ai_model() -> String {
@@ -313,6 +313,22 @@ impl Default for AppConfig {
     }
 }
 
+impl AppConfig {
+    /// Migrate deserialized config values to match the current supported set.
+    ///
+    /// Run after deserialization; silently corrects values that are no longer
+    /// valid (e.g. cloud provider names left over from older versions).
+    pub fn migrate(&mut self) {
+        if !matches!(self.ai_provider.as_str(), "lmstudio" | "ollama") {
+            tracing::warn!(
+                stale = %self.ai_provider,
+                "ai_provider migrated to 'lmstudio' (cloud providers are no longer supported)"
+            );
+            self.ai_provider = "lmstudio".into();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,7 +340,7 @@ mod tests {
         assert_eq!(config.language, "en-US");
         assert_eq!(config.sample_rate, 44100);
         assert_eq!(config.channels, 1);
-        assert_eq!(config.ai_provider, "openai");
+        assert_eq!(config.ai_provider, "lmstudio");
         assert_eq!(config.ai_model, "gpt-4o");
         assert_eq!(config.whisper_model, "large-v3-turbo");
         assert_eq!(config.tts_provider, "elevenlabs");
@@ -431,6 +447,30 @@ mod tests {
         let json = r#"{"ai_provider": "openai"}"#;
         let config: AppConfig = serde_json::from_str(json).unwrap();
         assert!(config.custom_context_templates.is_empty());
+    }
+
+    #[test]
+    fn stale_ai_provider_migrates_to_lmstudio() {
+        let json = r#"{"ai_provider": "anthropic"}"#;
+        let mut config: AppConfig = serde_json::from_str(json).unwrap();
+        config.migrate();
+        assert_eq!(config.ai_provider, "lmstudio");
+    }
+
+    #[test]
+    fn valid_ai_provider_not_changed_by_migrate() {
+        let json = r#"{"ai_provider": "ollama"}"#;
+        let mut config: AppConfig = serde_json::from_str(json).unwrap();
+        config.migrate();
+        assert_eq!(config.ai_provider, "ollama");
+    }
+
+    #[test]
+    fn default_ai_provider_migrates_to_lmstudio() {
+        // The default value is "openai" from default_ai_provider() — this must also migrate.
+        let mut config = AppConfig::default();
+        config.migrate();
+        assert_eq!(config.ai_provider, "lmstudio");
     }
 
 }

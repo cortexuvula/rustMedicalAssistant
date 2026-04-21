@@ -12,6 +12,7 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
 
 [dev-dependencies]
 proptest = "1"

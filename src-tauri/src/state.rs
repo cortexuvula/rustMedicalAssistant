@@ -163,6 +163,7 @@ impl AppState {
         let config = {
             let conn = db.conn().ok();
             conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
+                .map(|mut c| { c.migrate(); c })
         };
         let config_ref = config.as_ref().cloned().unwrap_or_default();
 

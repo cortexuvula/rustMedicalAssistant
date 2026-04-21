@@ -14,8 +14,10 @@ pub async fn reinit_providers(
     // Load saved settings for provider config (host, port, active provider, whisper model)
     let config = {
         let conn = state.db.conn().map_err(|e| e.to_string())?;
-        medical_db::settings::SettingsRepo::load_config(&conn)
-            .map_err(|e| e.to_string())?
+        let mut cfg = medical_db::settings::SettingsRepo::load_config(&conn)
+            .map_err(|e| e.to_string())?;
+        cfg.migrate();
+        cfg
     };
 
     // Rebuild AI providers with current config (includes LM Studio host/port)
