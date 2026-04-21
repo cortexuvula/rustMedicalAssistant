@@ -66,21 +66,15 @@ pub struct ContextTemplate {
 // SoapNoteSettings
 // ---------------------------------------------------------------------------
 
-/// Per-provider model overrides and ICD coding settings for SOAP generation.
+/// ICD coding settings for SOAP generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoapNoteSettings {
-    pub openai_model: String,
-    pub anthropic_model: String,
-    pub groq_model: String,
     pub icd_code_version: IcdVersion,
 }
 
 impl Default for SoapNoteSettings {
     fn default() -> Self {
         Self {
-            openai_model: "gpt-4o".into(),
-            anthropic_model: "claude-3-5-sonnet-20241022".into(),
-            groq_model: "llama-3.1-70b-versatile".into(),
             icd_code_version: IcdVersion::default(),
         }
     }
