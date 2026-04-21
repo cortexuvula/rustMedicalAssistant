@@ -40,6 +40,9 @@ struct GenerationSettings {
     icd_version: String,
     ai_provider: String,
     custom_soap_prompt: Option<String>,
+    custom_referral_prompt: Option<String>,
+    custom_letter_prompt: Option<String>,
+    custom_synopsis_prompt: Option<String>,
 }
 
 /// Load a recording and settings from DB on a blocking thread.
@@ -76,6 +79,9 @@ async fn load_recording_and_settings(
                     icd_version: icd,
                     ai_provider: cfg.ai_provider,
                     custom_soap_prompt: cfg.custom_soap_prompt,
+                    custom_referral_prompt: cfg.custom_referral_prompt,
+                    custom_letter_prompt: cfg.custom_letter_prompt,
+                    custom_synopsis_prompt: cfg.custom_synopsis_prompt,
                 }
             }
             None => GenerationSettings {
@@ -84,6 +90,9 @@ async fn load_recording_and_settings(
                 icd_version: "ICD-10".to_string(),
                 ai_provider: "openai".to_string(),
                 custom_soap_prompt: None,
+                custom_referral_prompt: None,
+                custom_letter_prompt: None,
+                custom_synopsis_prompt: None,
             },
         };
 
@@ -128,13 +137,6 @@ fn parse_soap_template(s: &str) -> SoapTemplate {
         "pediatric" => SoapTemplate::Pediatric,
         "geriatric" => SoapTemplate::Geriatric,
         _ => SoapTemplate::FollowUp, // default
-    }
-}
-
-fn max_tokens_for_provider(provider: &str) -> Option<u32> {
-    match provider {
-        "lmstudio" | "ollama" => None,
-        _ => Some(4096),
     }
 }
 
@@ -242,7 +244,6 @@ async fn generate_soap_inner(
     // Build prompts with full config
     let soap_template = template.map(parse_soap_template).unwrap_or_default();
     let model_name = settings.model.clone();
-    let max_tokens = max_tokens_for_provider(&settings.ai_provider);
     let config = SoapPromptConfig {
         template: soap_template,
         icd_version: settings.icd_version,
@@ -264,7 +265,7 @@ async fn generate_soap_inner(
         user_prompt,
         settings.model,
         settings.temperature,
-        max_tokens,
+        None,
     );
 
     let response = provider
@@ -388,7 +389,7 @@ async fn generate_referral_inner(
     let urg = urgency.unwrap_or("routine");
 
     let (system_prompt, user_prompt) =
-        document_generator::build_referral_prompt(soap_note, recipient, urg, None);
+        document_generator::build_referral_prompt(soap_note, recipient, urg, settings.custom_referral_prompt.as_deref());
 
     debug!(
         "generate_referral: provider='{}', recording='{}', recipient='{}', urgency='{}'",
@@ -403,7 +404,7 @@ async fn generate_referral_inner(
         user_prompt,
         settings.model,
         settings.temperature,
-        max_tokens_for_provider(&settings.ai_provider),
+        None,
     );
 
     let response = provider
@@ -489,7 +490,7 @@ async fn generate_letter_inner(
     let ltype = letter_type.unwrap_or("follow-up");
 
     let (system_prompt, user_prompt) =
-        document_generator::build_letter_prompt(soap_note, ltype, None);
+        document_generator::build_letter_prompt(soap_note, ltype, settings.custom_letter_prompt.as_deref());
 
     debug!(
         "generate_letter: provider='{}', recording='{}', letter_type='{}'",
@@ -503,7 +504,7 @@ async fn generate_letter_inner(
         user_prompt,
         settings.model,
         settings.temperature,
-        max_tokens_for_provider(&settings.ai_provider),
+        None,
     );
 
     let response = provider
@@ -542,7 +543,7 @@ pub async fn generate_synopsis(
         .filter(|s| !s.is_empty())
         .ok_or("Recording has no SOAP note. Generate a SOAP note first.")?;
 
-    let (system_prompt, user_prompt) = document_generator::build_synopsis_prompt(soap_note, None);
+    let (system_prompt, user_prompt) = document_generator::build_synopsis_prompt(soap_note, settings.custom_synopsis_prompt.as_deref());
 
     debug!(
         "generate_synopsis: provider='{}', recording='{}'",
@@ -555,7 +556,7 @@ pub async fn generate_synopsis(
         user_prompt,
         settings.model,
         settings.temperature,
-        max_tokens_for_provider(&settings.ai_provider),
+        None,
     );
 
     let response = provider
