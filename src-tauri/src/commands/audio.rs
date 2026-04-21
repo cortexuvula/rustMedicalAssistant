@@ -69,8 +69,9 @@ pub async fn start_recording(
     // Read the configured input device and sample rate from settings.
     let (input_device_name, sample_rate) = try_or_reset!(state, {
         let conn = state.db.conn().map_err(|e| e.to_string())?;
-        let config = medical_db::settings::SettingsRepo::load_config(&conn)
+        let mut config = medical_db::settings::SettingsRepo::load_config(&conn)
             .map_err(|e| e.to_string())?;
+        config.migrate();
         Ok::<_, String>((
             config.input_device.filter(|s| !s.is_empty()),
             config.sample_rate,

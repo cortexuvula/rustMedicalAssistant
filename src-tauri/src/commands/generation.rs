@@ -60,7 +60,9 @@ async fn load_recording_and_settings(
         let recording =
             RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?;
 
-        let config = medical_db::settings::SettingsRepo::load_config(&conn).ok();
+        let config = medical_db::settings::SettingsRepo::load_config(&conn)
+            .ok()
+            .map(|mut c| { c.migrate(); c });
         let settings = match config {
             Some(cfg) => {
                 let icd = match cfg.icd_version {

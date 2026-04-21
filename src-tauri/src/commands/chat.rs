@@ -54,7 +54,9 @@ struct ErrorPayload {
 /// Falls back to sensible defaults if settings can't be read.
 fn load_chat_settings(state: &tauri::State<'_, AppState>) -> (String, f32) {
     let conn = state.db.conn().ok();
-    let config = conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok());
+    let config = conn
+        .and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
+        .map(|mut c| { c.migrate(); c });
     match config {
         Some(cfg) => (cfg.ai_model, cfg.temperature),
         None => ("gpt-4o".to_string(), 0.7),

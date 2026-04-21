@@ -132,7 +132,9 @@ pub fn export_json(templates: &[ContextTemplate]) -> String {
 
 fn load_config(state: &tauri::State<'_, AppState>) -> Result<medical_core::types::settings::AppConfig, String> {
     let conn = state.db.conn().map_err(|e| e.to_string())?;
-    SettingsRepo::load_config(&conn).map_err(|e| e.to_string())
+    let mut config = SettingsRepo::load_config(&conn).map_err(|e| e.to_string())?;
+    config.migrate();
+    Ok(config)
 }
 
 fn save_config(

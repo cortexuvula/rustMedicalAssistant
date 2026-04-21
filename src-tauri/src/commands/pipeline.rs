@@ -46,7 +46,8 @@ pub async fn process_recording(
             let db = std::sync::Arc::clone(&state.db);
             tokio::task::spawn_blocking(move || {
                 let conn = db.conn().ok()?;
-                let cfg = medical_db::settings::SettingsRepo::load_config(&conn).ok()?;
+                let mut cfg = medical_db::settings::SettingsRepo::load_config(&conn).ok()?;
+                cfg.migrate();
                 let t = match cfg.soap_template {
                     medical_core::types::settings::SoapTemplate::FollowUp => "follow_up",
                     medical_core::types::settings::SoapTemplate::NewPatient => "new_patient",

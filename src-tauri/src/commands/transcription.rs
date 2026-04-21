@@ -267,7 +267,9 @@ pub async fn transcribe_recording(
     let db_vocab = Arc::clone(&state.db);
     let display_text = tokio::task::spawn_blocking(move || {
         let conn = db_vocab.conn().map_err(|e| e.to_string())?;
-        let config = SettingsRepo::load_config(&conn).ok();
+        let config = SettingsRepo::load_config(&conn)
+            .ok()
+            .map(|mut c| { c.migrate(); c });
         let vocab_enabled = config.map(|c| c.vocabulary_enabled).unwrap_or(true);
         if vocab_enabled {
             let entries = VocabularyRepo::list_enabled(&conn).map_err(|e| e.to_string())?;

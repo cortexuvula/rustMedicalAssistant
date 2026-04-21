@@ -79,6 +79,7 @@ pub async fn download_model(
     let whisper_model = {
         let conn = state.db.conn().ok();
         conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
+            .map(|mut c| { c.migrate(); c })
             .map(|cfg| cfg.whisper_model)
             .unwrap_or_else(|| "large-v3-turbo".into())
     };
