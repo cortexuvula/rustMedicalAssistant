@@ -6,6 +6,9 @@
 use std::collections::HashMap;
 
 /// Substitute `{key}` tokens in `template` with values from `placeholders`.
+///
+/// Values must not contain `{...}` substrings matching other keys in the map —
+/// iteration order is non-deterministic, so such collisions yield unstable output.
 pub fn resolve_prompt(template: &str, placeholders: &HashMap<&str, String>) -> String {
     let mut out = template.to_string();
     for (key, value) in placeholders {
