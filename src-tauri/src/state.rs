@@ -183,14 +183,8 @@ impl AppState {
         }
 
         // --- RAG subsystem ---
-        // Create the embedding generator: prefer OpenAI if key exists, else Ollama
-        let embedding_generator = if let Ok(Some(key)) = keys.get_key("openai") {
-            info!("RAG: using OpenAI embeddings");
-            Arc::new(EmbeddingGenerator::new_openai(&key))
-        } else {
-            info!("RAG: using Ollama embeddings (local)");
-            Arc::new(EmbeddingGenerator::new_ollama(None, None))
-        };
+        info!("RAG: using Ollama embeddings (local)");
+        let embedding_generator = Arc::new(EmbeddingGenerator::new_ollama(None, None));
 
         let vector_store = Arc::new(VectorStore::new(Arc::clone(&db)));
         let bm25_search = Arc::new(Bm25Search::new(Arc::clone(&db)));
