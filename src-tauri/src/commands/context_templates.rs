@@ -1,8 +1,12 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+use tracing::{info, instrument};
 
 use medical_core::types::settings::ContextTemplate;
+use medical_db::settings::SettingsRepo;
+
+use crate::state::AppState;
 
 /// Sort templates alphabetically by name (case-insensitive).
 pub fn sort_templates(templates: &mut Vec<ContextTemplate>) {
@@ -126,11 +130,6 @@ pub fn export_json(templates: &[ContextTemplate]) -> String {
     .expect("serialising context templates should never fail")
 }
 
-use medical_db::settings::SettingsRepo;
-use tracing::{info, instrument};
-
-use crate::state::AppState;
-
 fn load_config(state: &tauri::State<'_, AppState>) -> Result<medical_core::types::settings::AppConfig, String> {
     let conn = state.db.conn().map_err(|e| e.to_string())?;
     SettingsRepo::load_config(&conn).map_err(|e| e.to_string())
@@ -185,9 +184,11 @@ pub fn rename_context_template(
     if new_name.is_empty() {
         return Err("Template name cannot be empty".into());
     }
+    let old_name_log = old_name.clone();
     let mut config = load_config(&state)?;
     let result = rename_in(&mut config.custom_context_templates, &old_name, new_name)?;
     save_config(&state, &config)?;
+    info!(old_name = %old_name_log, new_name = %result.name, "Renamed context template");
     Ok(result)
 }
 
