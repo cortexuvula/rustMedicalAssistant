@@ -13,6 +13,12 @@
   import VocabularyDialog from './VocabularyDialog.svelte';
   import { getVocabularyCount, importVocabularyJson, exportVocabularyJson } from '../api/vocabulary';
   import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+  import ContextTemplateDialog from './ContextTemplateDialog.svelte';
+  import {
+    listContextTemplates,
+    importContextTemplatesJson,
+    exportContextTemplatesJson,
+  } from '../api/contextTemplates';
 
   type Section = 'general' | 'apikeys' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -51,6 +57,8 @@
   let progressUnlisten: UnlistenFn | null = null;
   let vocabDialogOpen = $state(false);
   let vocabCount = $state<[number, number]>([0, 0]);
+  let ctxTemplateDialogOpen = $state(false);
+  let ctxTemplateCount = $state(0);
 
   async function fetchAudioDevices() {
     devicesLoading = true;
@@ -139,6 +147,7 @@
       fetchWhisperModels(),
       fetchPyannoteModels(),
       loadVocabCount(),
+      loadCtxTemplateCount(),
     ]);
     if (keys.status === 'fulfilled') {
       storedKeys = keys.value;
@@ -264,6 +273,53 @@
   function handleVocabDialogClose() {
     vocabDialogOpen = false;
     loadVocabCount();
+  }
+
+  async function loadCtxTemplateCount() {
+    try {
+      const list = await listContextTemplates();
+      ctxTemplateCount = list.length;
+    } catch (err) {
+      console.error('Failed to load context template count:', err);
+    }
+  }
+
+  async function handleImportCtxTemplates() {
+    const selected = await openDialog({
+      multiple: false,
+      title: 'Import Context Templates JSON',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (selected) {
+      try {
+        const count = await importContextTemplatesJson(selected as string);
+        alert(`Imported ${count} context templates.`);
+        await loadCtxTemplateCount();
+      } catch (err: any) {
+        alert(`Import failed: ${err}`);
+      }
+    }
+  }
+
+  async function handleExportCtxTemplates() {
+    const selected = await saveDialog({
+      title: 'Export Context Templates JSON',
+      defaultPath: 'context_templates.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (selected) {
+      try {
+        const count = await exportContextTemplatesJson(selected);
+        alert(`Exported ${count} context templates.`);
+      } catch (err: any) {
+        alert(`Export failed: ${err}`);
+      }
+    }
+  }
+
+  function handleCtxTemplateDialogClose() {
+    ctxTemplateDialogOpen = false;
+    loadCtxTemplateCount();
   }
 
   async function handleAiProviderChange(e: Event) {
@@ -446,6 +502,26 @@
               Import JSON
             </button>
             <button class="btn-browse" onclick={handleExportVocabulary}>
+              Export JSON
+            </button>
+          </div>
+        </div>
+
+        <h3 class="section-title" style="margin-top: 24px">Context Templates</h3>
+        <p class="section-desc">Reusable snippets of clinical context that can be applied to the Patient Context field on the Record tab.</p>
+
+        <div class="form-group">
+          <span class="form-label">
+            {ctxTemplateCount} template{ctxTemplateCount === 1 ? '' : 's'} saved
+          </span>
+          <div class="vocab-buttons">
+            <button class="btn-browse" onclick={() => { ctxTemplateDialogOpen = true; }}>
+              Manage Templates
+            </button>
+            <button class="btn-browse" onclick={handleImportCtxTemplates}>
+              Import JSON
+            </button>
+            <button class="btn-browse" onclick={handleExportCtxTemplates}>
               Export JSON
             </button>
           </div>
@@ -778,6 +854,7 @@
 </div>
 
 <VocabularyDialog open={vocabDialogOpen} onclose={handleVocabDialogClose} />
+<ContextTemplateDialog open={ctxTemplateDialogOpen} onclose={handleCtxTemplateDialogClose} />
 
 <style>
   .settings-layout {
