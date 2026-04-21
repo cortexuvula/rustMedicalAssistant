@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use chrono::Local;
 use medical_core::types::settings::SoapTemplate;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::prompt_resolver::resolve_prompt;
@@ -20,14 +19,13 @@ use crate::prompt_resolver::resolve_prompt;
 // ---------------------------------------------------------------------------
 
 /// Inputs to `build_soap_prompt`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SoapPromptConfig {
     pub template: SoapTemplate,
     /// One of "ICD-9", "ICD-10", "both" (case-sensitive).
     pub icd_version: String,
     /// User-supplied override; empty string is treated as absent.
     pub custom_prompt: Option<String>,
-    pub include_context: bool,
 }
 
 impl Default for SoapPromptConfig {
@@ -36,7 +34,6 @@ impl Default for SoapPromptConfig {
             template: SoapTemplate::FollowUp,
             icd_version: "ICD-10".into(),
             custom_prompt: None,
-            include_context: true,
         }
     }
 }
