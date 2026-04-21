@@ -163,8 +163,10 @@ pub async fn import_vocabulary_json(
         .map_err(|e| format!("Failed to read file: {e}"))?;
 
     #[derive(Deserialize)]
-    struct ImportFile {
-        corrections: Vec<ImportEntry>,
+    #[serde(untagged)]
+    enum ImportFile {
+        Wrapped { corrections: Vec<ImportEntry> },
+        Bare(Vec<ImportEntry>),
     }
     #[derive(Deserialize)]
     struct ImportEntry {
@@ -182,10 +184,13 @@ pub async fn import_vocabulary_json(
 
     let data: ImportFile =
         serde_json::from_str(&content).map_err(|e| format!("Invalid JSON format: {e}"))?;
+    let corrections = match data {
+        ImportFile::Wrapped { corrections } => corrections,
+        ImportFile::Bare(list) => list,
+    };
 
     let now = Utc::now();
-    let entries: Vec<VocabularyEntry> = data
-        .corrections
+    let entries: Vec<VocabularyEntry> = corrections
         .into_iter()
         .filter(|e| !e.find_text.trim().is_empty() && !e.replacement.trim().is_empty())
         .map(|e| VocabularyEntry {

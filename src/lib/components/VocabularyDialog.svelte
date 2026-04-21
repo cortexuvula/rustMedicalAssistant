@@ -204,126 +204,133 @@
       </div>
 
       <div class="vocab-toolbar">
-        <select bind:value={filterCategory}>
+        <select class="filter-select" bind:value={filterCategory}>
           <option value="all">All Categories</option>
           {#each CATEGORIES as cat}
             <option value={cat.value}>{cat.label}</option>
           {/each}
         </select>
         <input
+          class="search-input"
           type="text"
-          placeholder="Search..."
+          placeholder="Search find or replacement text..."
           bind:value={searchText}
         />
         <button class="btn-add" onclick={openAddForm}>+ Add Entry</button>
       </div>
 
-      {#if showForm}
-        <div class="vocab-form">
-          <h3>{editing ? 'Edit' : 'Add'} Entry</h3>
-          {#if formError}
-            <div class="form-error">{formError}</div>
-          {/if}
-          <div class="form-row">
-            <label>
-              Find Text
-              <input type="text" bind:value={formFind} placeholder="e.g. htn" />
-            </label>
-            <label>
-              Replacement
-              <input type="text" bind:value={formReplace} placeholder="e.g. hypertension" />
-            </label>
+      <div class="vocab-body">
+        {#if showForm}
+          <div class="vocab-form">
+            <div class="form-header">
+              <h3>{editing ? 'Edit' : 'Add'} Entry</h3>
+              <button class="btn-close-form" aria-label="Close form" onclick={closeForm}>&times;</button>
+            </div>
+            {#if formError}
+              <div class="form-error">{formError}</div>
+            {/if}
+            <div class="form-grid">
+              <label class="field">
+                <span>Find Text</span>
+                <input type="text" bind:value={formFind} placeholder="e.g. htn" />
+              </label>
+              <label class="field">
+                <span>Replacement</span>
+                <input type="text" bind:value={formReplace} placeholder="e.g. hypertension" />
+              </label>
+              <label class="field">
+                <span>Category</span>
+                <select bind:value={formCategory}>
+                  {#each CATEGORIES as cat}
+                    <option value={cat.value}>{cat.label}</option>
+                  {/each}
+                </select>
+              </label>
+              <label class="field">
+                <span>Priority</span>
+                <input type="number" bind:value={formPriority} min="0" max="100" />
+              </label>
+            </div>
+            <div class="form-toggles">
+              <label class="vocab-toggle">
+                <input type="checkbox" bind:checked={formCaseSensitive} />
+                <span class="toggle-text">Case sensitive</span>
+              </label>
+              <label class="vocab-toggle">
+                <input type="checkbox" bind:checked={formEnabled} />
+                <span class="toggle-text">Enabled</span>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick={handleSave}>Save</button>
+              <button class="btn-cancel" onclick={closeForm}>Cancel</button>
+            </div>
           </div>
-          <div class="form-row">
-            <label>
-              Category
-              <select bind:value={formCategory}>
-                {#each CATEGORIES as cat}
-                  <option value={cat.value}>{cat.label}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              Priority
-              <input type="number" bind:value={formPriority} min="0" max="100" />
-            </label>
-          </div>
-          <div class="form-row">
-            <label class="checkbox-label">
-              <input type="checkbox" bind:checked={formCaseSensitive} />
-              Case Sensitive
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" bind:checked={formEnabled} />
-              Enabled
-            </label>
-          </div>
-          <div class="form-actions">
-            <button class="btn-save" onclick={handleSave}>Save</button>
-            <button class="btn-cancel" onclick={closeForm}>Cancel</button>
-          </div>
-        </div>
-      {/if}
+        {/if}
 
-      <div class="vocab-table-wrap">
-        {#if loading}
-          <p class="loading-text">Loading...</p>
-        {:else if filteredEntries().length === 0}
-          <p class="empty-text">No vocabulary entries found.</p>
-        {:else}
-          <table class="vocab-table">
-            <thead>
-              <tr>
-                <th>Find</th>
-                <th>Replace With</th>
-                <th>Category</th>
-                <th>Enabled</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each filteredEntries() as entry (entry.id)}
-                <tr class:disabled={!entry.enabled}>
-                  <td class="mono">{entry.find_text}</td>
-                  <td>{entry.replacement}</td>
-                  <td>{categoryLabel(entry.category)}</td>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={entry.enabled}
-                      onchange={() => handleToggleEnabled(entry)}
-                    />
-                  </td>
-                  <td class="actions">
-                    <button class="btn-edit" onclick={() => openEditForm(entry)}>Edit</button>
-                    <button class="btn-delete" onclick={() => handleDelete(entry)}>Del</button>
-                  </td>
+        <div class="vocab-table-wrap">
+          {#if loading}
+            <p class="loading-text">Loading...</p>
+          {:else if filteredEntries().length === 0}
+            <p class="empty-text">No vocabulary entries found.</p>
+          {:else}
+            <table class="vocab-table">
+              <thead>
+                <tr>
+                  <th>Find</th>
+                  <th>Replace With</th>
+                  <th class="col-category">Category</th>
+                  <th class="col-enabled">Enabled</th>
+                  <th class="col-actions">Actions</th>
                 </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
-      </div>
+              </thead>
+              <tbody>
+                {#each filteredEntries() as entry (entry.id)}
+                  <tr class:disabled={!entry.enabled}>
+                    <td class="mono">{entry.find_text}</td>
+                    <td class="truncate">{entry.replacement}</td>
+                    <td class="col-category">{categoryLabel(entry.category)}</td>
+                    <td class="col-enabled">
+                      <input
+                        type="checkbox"
+                        checked={entry.enabled}
+                        onchange={() => handleToggleEnabled(entry)}
+                      />
+                    </td>
+                    <td class="col-actions actions">
+                      <button class="btn-edit" onclick={() => openEditForm(entry)}>Edit</button>
+                      <button class="btn-delete" onclick={() => handleDelete(entry)}>Del</button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        </div>
 
-      <div class="vocab-test">
-        <h3>Test Corrections</h3>
-        <textarea
-          bind:value={testInput}
-          placeholder="Paste sample text to test corrections..."
-          rows="3"
-        ></textarea>
-        <button class="btn-test" onclick={handleTest} disabled={!testInput.trim()}>
-          Test
-        </button>
-        {#if testResult}
-          <div class="test-result">
-            <strong>{testResult.total_replacements} replacement{testResult.total_replacements !== 1 ? 's' : ''}</strong>
-            <pre>{testResult.corrected_text}</pre>
-          </div>
-        {/if}
+        <div class="vocab-test">
+          <h3>Test Corrections</h3>
+          <textarea
+            bind:value={testInput}
+            placeholder="Paste sample text to test corrections..."
+            rows="3"
+          ></textarea>
+          <button class="btn-test" onclick={handleTest} disabled={!testInput.trim()}>
+            Test
+          </button>
+          {#if testResult}
+            <div class="test-result">
+              <strong>{testResult.total_replacements} replacement{testResult.total_replacements !== 1 ? 's' : ''}</strong>
+              <pre>{testResult.corrected_text}</pre>
+            </div>
+          {/if}
+        </div>
       </div>
 
       <div class="vocab-footer">
+        <span class="footer-count">
+          {filteredEntries().length} shown{searchText || filterCategory !== 'all' ? ` of ${entries.length}` : ''}
+        </span>
         <button class="btn-delete-all" onclick={handleDeleteAll} disabled={entries.length === 0}>
           Delete All ({entries.length})
         </button>
@@ -347,43 +354,66 @@
     color: var(--text-primary, #e0e0e0);
     border-radius: 8px;
     width: 90vw;
-    max-width: 800px;
+    max-width: 880px;
     max-height: 85vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   }
+
+  /* Header */
   .vocab-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 16px 20px;
+    padding: 14px 20px;
     border-bottom: 1px solid var(--border-color, #333);
+    flex: 0 0 auto;
   }
-  .vocab-header h2 { margin: 0; font-size: 1.2rem; }
+  .vocab-header h2 { margin: 0; font-size: 1.1rem; font-weight: 600; }
   .btn-close {
     background: none;
     border: none;
     color: var(--text-secondary, #aaa);
-    font-size: 1.5rem;
+    font-size: 1.4rem;
+    line-height: 1;
+    padding: 4px 8px;
     cursor: pointer;
+    border-radius: 4px;
   }
+  .btn-close:hover { background: rgba(255, 255, 255, 0.08); }
+
+  /* Toolbar */
   .vocab-toolbar {
     display: flex;
     gap: 8px;
-    padding: 12px 20px;
+    padding: 10px 20px;
     border-bottom: 1px solid var(--border-color, #333);
+    flex: 0 0 auto;
+    align-items: center;
   }
-  .vocab-toolbar select,
-  .vocab-toolbar input {
+  .filter-select {
+    flex: 0 0 180px;
     padding: 6px 10px;
     border-radius: 4px;
     border: 1px solid var(--border-color, #444);
     background: var(--bg-primary, #111);
     color: var(--text-primary, #e0e0e0);
+    font-size: 0.9rem;
   }
-  .vocab-toolbar input { flex: 1; }
+  .search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color, #444);
+    background: var(--bg-primary, #111);
+    color: var(--text-primary, #e0e0e0);
+    font-size: 0.9rem;
+  }
   .btn-add {
+    flex: 0 0 auto;
     padding: 6px 14px;
     border-radius: 4px;
     border: none;
@@ -391,66 +421,261 @@
     color: white;
     cursor: pointer;
     white-space: nowrap;
+    font-size: 0.9rem;
   }
+  .btn-add:hover { filter: brightness(1.1); }
+
+  /* Body (single scroll container) */
+  .vocab-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  /* Form */
   .vocab-form {
-    padding: 12px 20px;
+    padding: 14px 20px;
     border-bottom: 1px solid var(--border-color, #333);
     background: var(--bg-primary, #111);
   }
-  .vocab-form h3 { margin: 0 0 8px; font-size: 0.95rem; }
-  .form-error { color: #ff6b6b; margin-bottom: 8px; font-size: 0.85rem; }
-  .form-row { display: flex; gap: 12px; margin-bottom: 8px; }
-  .form-row label { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
-  .form-row input[type="text"],
-  .form-row input[type="number"],
-  .form-row select {
-    padding: 6px 8px;
+  .form-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .form-header h3 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+  .btn-close-form {
+    background: none;
+    border: none;
+    color: var(--text-secondary, #888);
+    font-size: 1.2rem;
+    line-height: 1;
+    padding: 2px 6px;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+  .btn-close-form:hover { background: rgba(255, 255, 255, 0.08); }
+  .form-error {
+    color: #ff6b6b;
+    margin-bottom: 10px;
+    font-size: 0.85rem;
+    padding: 6px 10px;
+    background: rgba(255, 107, 107, 0.1);
+    border-radius: 4px;
+  }
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #aaa);
+  }
+  .field span { font-weight: 500; }
+  .field input,
+  .field select {
+    padding: 7px 10px;
     border-radius: 4px;
     border: 1px solid var(--border-color, #444);
     background: var(--bg-secondary, #1e1e1e);
     color: var(--text-primary, #e0e0e0);
+    font-size: 0.9rem;
   }
-  .checkbox-label { flex-direction: row !important; align-items: center; gap: 6px !important; }
-  .form-actions { display: flex; gap: 8px; margin-top: 8px; }
-  .btn-save { padding: 6px 16px; border-radius: 4px; border: none; background: var(--accent-color, #4a9eff); color: white; cursor: pointer; }
-  .btn-cancel { padding: 6px 16px; border-radius: 4px; border: 1px solid var(--border-color, #444); background: transparent; color: var(--text-primary, #e0e0e0); cursor: pointer; }
+  .form-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 24px;
+    margin-bottom: 14px;
+    padding: 4px 0;
+  }
+  .vocab-toggle {
+    display: inline-flex !important;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.88rem;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    color: var(--text-primary, #e0e0e0);
+  }
+  .vocab-toggle input[type="checkbox"] {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    width: 14px !important;
+    height: 14px;
+    min-width: 14px;
+  }
+  /* Override global input { width: 100% } for all checkboxes in this dialog */
+  .vocab-dialog input[type="checkbox"] {
+    width: 14px !important;
+    height: 14px;
+    min-width: 14px;
+    padding: 0;
+    margin: 0;
+    vertical-align: middle;
+  }
+  .toggle-text {
+    display: inline-block;
+    white-space: nowrap;
+  }
+  .form-actions { display: flex; gap: 8px; }
+  .btn-save {
+    padding: 7px 18px;
+    border-radius: 4px;
+    border: none;
+    background: var(--accent-color, #4a9eff);
+    color: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .btn-save:hover { filter: brightness(1.1); }
+  .btn-cancel {
+    padding: 7px 18px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color, #444);
+    background: transparent;
+    color: var(--text-primary, #e0e0e0);
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .btn-cancel:hover { background: rgba(255, 255, 255, 0.05); }
+
+  /* Table */
   .vocab-table-wrap {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0 20px;
+    padding: 8px 20px 16px;
   }
-  .loading-text, .empty-text { text-align: center; color: var(--text-secondary, #888); padding: 24px; }
-  .vocab-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  .vocab-table th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border-color, #333); color: var(--text-secondary, #888); font-weight: 500; }
-  .vocab-table td { padding: 6px; border-bottom: 1px solid var(--border-color, #222); }
-  .vocab-table tr.disabled { opacity: 0.5; }
-  .mono { font-family: monospace; }
+  .loading-text, .empty-text {
+    text-align: center;
+    color: var(--text-secondary, #888);
+    padding: 32px;
+    font-size: 0.9rem;
+  }
+  .vocab-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    table-layout: fixed;
+  }
+  .vocab-table th {
+    text-align: left;
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--border-color, #333);
+    color: var(--text-secondary, #888);
+    font-weight: 500;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    position: sticky;
+    top: 0;
+    background: var(--bg-secondary, #1e1e1e);
+    z-index: 1;
+  }
+  .vocab-table td {
+    padding: 8px;
+    border-bottom: 1px solid var(--border-color, #222);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vocab-table tr.disabled td { opacity: 0.45; }
+  .vocab-table tr:hover td { background: rgba(255, 255, 255, 0.03); }
+  .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; color: var(--text-primary, #e0e0e0); }
+  .truncate { max-width: 0; }
+  .col-category { width: 140px; color: var(--text-secondary, #aaa); }
+  .col-enabled { width: 70px; text-align: center; }
+  .col-enabled input { cursor: pointer; }
+  .col-actions { width: 110px; }
   .actions { display: flex; gap: 4px; }
-  .btn-edit, .btn-delete { padding: 3px 8px; border-radius: 3px; border: 1px solid var(--border-color, #444); background: transparent; color: var(--text-secondary, #aaa); cursor: pointer; font-size: 0.8rem; }
-  .btn-delete { color: #ff6b6b; border-color: #ff6b6b44; }
-  .vocab-test {
-    padding: 12px 20px;
-    border-top: 1px solid var(--border-color, #333);
+  .btn-edit, .btn-delete {
+    padding: 3px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border-color, #444);
+    background: transparent;
+    color: var(--text-secondary, #bbb);
+    cursor: pointer;
+    font-size: 0.78rem;
   }
-  .vocab-test h3 { margin: 0 0 8px; font-size: 0.95rem; }
+  .btn-edit:hover { background: rgba(255, 255, 255, 0.05); }
+  .btn-delete { color: #ff6b6b; border-color: #ff6b6b44; }
+  .btn-delete:hover { background: rgba(255, 107, 107, 0.08); }
+
+  /* Test area */
+  .vocab-test {
+    padding: 12px 20px 16px;
+    border-top: 1px solid var(--border-color, #333);
+    background: var(--bg-primary, #111);
+  }
+  .vocab-test h3 { margin: 0 0 8px; font-size: 0.9rem; font-weight: 600; }
   .vocab-test textarea {
     width: 100%;
     padding: 8px;
     border-radius: 4px;
     border: 1px solid var(--border-color, #444);
-    background: var(--bg-primary, #111);
+    background: var(--bg-secondary, #1e1e1e);
     color: var(--text-primary, #e0e0e0);
     resize: vertical;
     font-family: inherit;
+    font-size: 0.88rem;
+    box-sizing: border-box;
   }
-  .btn-test { margin-top: 6px; padding: 6px 14px; border-radius: 4px; border: none; background: var(--accent-color, #4a9eff); color: white; cursor: pointer; }
-  .test-result { margin-top: 8px; }
-  .test-result pre { background: var(--bg-primary, #111); padding: 8px; border-radius: 4px; white-space: pre-wrap; font-size: 0.85rem; margin-top: 4px; }
+  .btn-test {
+    margin-top: 8px;
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: none;
+    background: var(--accent-color, #4a9eff);
+    color: white;
+    cursor: pointer;
+    font-size: 0.88rem;
+  }
+  .btn-test:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-test:not(:disabled):hover { filter: brightness(1.1); }
+  .test-result { margin-top: 10px; }
+  .test-result strong { font-size: 0.85rem; color: var(--accent-color, #4a9eff); }
+  .test-result pre {
+    background: var(--bg-secondary, #1e1e1e);
+    padding: 10px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-size: 0.85rem;
+    margin-top: 6px;
+    border: 1px solid var(--border-color, #333);
+  }
+
+  /* Footer */
   .vocab-footer {
-    padding: 12px 20px;
+    padding: 10px 20px;
     border-top: 1px solid var(--border-color, #333);
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: center;
+    flex: 0 0 auto;
   }
-  .btn-delete-all { padding: 6px 14px; border-radius: 4px; border: 1px solid #ff6b6b44; background: transparent; color: #ff6b6b; cursor: pointer; }
+  .footer-count {
+    font-size: 0.82rem;
+    color: var(--text-secondary, #888);
+  }
+  .btn-delete-all {
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: 1px solid #ff6b6b44;
+    background: transparent;
+    color: #ff6b6b;
+    cursor: pointer;
+    font-size: 0.88rem;
+  }
+  .btn-delete-all:not(:disabled):hover { background: rgba(255, 107, 107, 0.08); }
+  .btn-delete-all:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>

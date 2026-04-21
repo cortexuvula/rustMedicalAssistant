@@ -30,11 +30,11 @@ impl VocabularyCategory {
     }
 
     pub fn from_str(s: &str) -> Self {
-        match s {
-            "doctor_names" => Self::DoctorNames,
-            "medication_names" => Self::MedicationNames,
-            "medical_terminology" => Self::MedicalTerminology,
-            "abbreviations" => Self::Abbreviations,
+        match s.to_ascii_lowercase().as_str() {
+            "doctor_names" | "doctors" | "doctor" => Self::DoctorNames,
+            "medication_names" | "medications" | "medication" | "meds" => Self::MedicationNames,
+            "medical_terminology" | "terminology" | "medical" => Self::MedicalTerminology,
+            "abbreviations" | "abbreviation" | "abbr" => Self::Abbreviations,
             _ => Self::General,
         }
     }

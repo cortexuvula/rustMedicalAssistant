@@ -8,7 +8,8 @@ A privacy-first medical transcription desktop application built with Rust and Sv
 - **Speaker Diarization** — Pyannote-based pipeline identifies who is speaking (e.g., Doctor vs. Patient) using ONNX segmentation and speaker embedding models.
 - **SOAP Note Generation** — AI-powered generation of Subjective, Objective, Assessment, and Plan notes from transcripts.
 - **Medical Document Generation** — Generate referral letters, clinical letters, and synopses.
-- **Multi-Provider AI Chat** — OpenAI, Anthropic, Gemini, Groq, Cerebras, Ollama, and LM Studio.
+- **Multi-Provider AI Chat** — OpenAI, Anthropic, Gemini, Groq, Cerebras, Ollama, and LM Studio (local or remote host).
+- **Custom Vocabulary** — User-defined find/replace rules applied to transcripts after STT, with word-boundary matching, priority ordering, and import/export compatible with the Python Medical-Assistant `vocabulary.json` format.
 - **RAG (Retrieval-Augmented Generation)** — Ingest clinical documents for context-aware AI responses.
 - **Agentic Workflows** — Multi-step AI agent orchestration with tool use.
 - **Export** — PDF, DOCX, and FHIR R4 (healthcare interoperability standard).
@@ -29,7 +30,7 @@ A privacy-first medical transcription desktop application built with Rust and Sv
 
 ## Architecture
 
-FerriScribe is organized as a Cargo workspace with 13 crates:
+FerriScribe is organized as a Cargo workspace with 12 crates:
 
 ```
 crates/
@@ -79,7 +80,7 @@ Models are downloaded from HuggingFace/GitHub and stored locally.
 ## Usage
 
 1. **Record** — Click the record button or import an audio file.
-2. **Transcribe** — Transcription runs locally with speaker labels.
+2. **Transcribe** — Transcription runs locally with speaker labels. Custom vocabulary corrections (configured in Settings > Custom Vocabulary) are applied automatically after STT.
 3. **Generate** — Create SOAP notes, referrals, or clinical letters from transcripts.
 4. **Export** — Save as PDF, DOCX, or FHIR R4.
 5. **Chat** — Ask questions about the recording or clinical context.
