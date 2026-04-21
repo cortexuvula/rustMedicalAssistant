@@ -686,13 +686,8 @@
             value={$settings.ai_provider}
             onchange={handleAiProviderChange}
           >
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic</option>
-            <option value="gemini">Gemini</option>
-            <option value="groq">Groq</option>
-            <option value="cerebras">Cerebras</option>
-            <option value="ollama">Ollama</option>
             <option value="lmstudio">LM Studio</option>
+            <option value="ollama">Ollama</option>
           </select>
         </div>
 

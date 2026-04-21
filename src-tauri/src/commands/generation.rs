@@ -85,10 +85,10 @@ async fn load_recording_and_settings(
                 }
             }
             None => GenerationSettings {
-                model: "gpt-4o".to_string(),
+                model: String::new(),
                 temperature: 0.2,
                 icd_version: "ICD-10".to_string(),
-                ai_provider: "openai".to_string(),
+                ai_provider: "lmstudio".to_string(),
                 custom_soap_prompt: None,
                 custom_referral_prompt: None,
                 custom_letter_prompt: None,
@@ -111,7 +111,7 @@ async fn resolve_provider(
     registry
         .get_arc(provider_name)
         .or_else(|| registry.get_active_arc())
-        .ok_or_else(|| "No AI provider configured. Add an API key in Settings.".to_string())
+        .ok_or_else(|| "No AI provider configured. Check LM Studio / Ollama settings.".to_string())
 }
 
 /// Persist a recording update on a blocking thread.

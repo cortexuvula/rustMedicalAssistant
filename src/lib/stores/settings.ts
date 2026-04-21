@@ -5,8 +5,8 @@ import { getSettings, saveSettings } from '../api/settings';
 const defaults: AppConfig = {
   theme: 'dark',
   language: 'en-US',
-  ai_provider: 'openai',
-  ai_model: 'gpt-4o',
+  ai_provider: 'lmstudio',
+  ai_model: '',
   whisper_model: 'large-v3-turbo',
   tts_provider: 'elevenlabs',
   tts_voice: 'default',

@@ -90,8 +90,8 @@ impl Default for AgentSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            provider: "openai".into(),
-            model: "gpt-4o".into(),
+            provider: "lmstudio".into(),
+            model: String::new(),
             temperature: 0.2,
             max_tokens: 4096,
             system_prompt: None,
@@ -121,8 +121,8 @@ mod tests {
     fn agent_settings_defaults() {
         let settings = AgentSettings::default();
         assert!(settings.enabled);
-        assert_eq!(settings.provider, "openai");
-        assert_eq!(settings.model, "gpt-4o");
+        assert_eq!(settings.provider, "lmstudio");
+        assert_eq!(settings.model, "");
         assert!((settings.temperature - 0.2).abs() < f32::EPSILON);
         assert_eq!(settings.max_tokens, 4096);
         assert!(settings.system_prompt.is_none());
