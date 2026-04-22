@@ -196,6 +196,42 @@ fn default_vocabulary_enabled() -> bool {
     true
 }
 
+fn default_rsvp_wpm() -> u32 {
+    300
+}
+
+fn default_rsvp_font_size() -> u32 {
+    48
+}
+
+fn default_rsvp_chunk_size() -> u8 {
+    1
+}
+
+fn default_rsvp_dark_theme() -> bool {
+    true
+}
+
+fn default_rsvp_show_context() -> bool {
+    false
+}
+
+fn default_rsvp_audio_cue() -> bool {
+    false
+}
+
+fn default_rsvp_auto_start() -> bool {
+    true
+}
+
+fn default_rsvp_remember_sections() -> bool {
+    false
+}
+
+fn default_rsvp_remembered_sections() -> Vec<String> {
+    Vec::new()
+}
+
 // ---------------------------------------------------------------------------
 // AppConfig
 // ---------------------------------------------------------------------------
@@ -251,6 +287,25 @@ pub struct AppConfig {
     pub auto_index_rag: bool,
     #[serde(default = "default_vocabulary_enabled")]
     pub vocabulary_enabled: bool,
+    // RSVP speed-reader
+    #[serde(default = "default_rsvp_wpm")]
+    pub rsvp_wpm: u32,
+    #[serde(default = "default_rsvp_font_size")]
+    pub rsvp_font_size: u32,
+    #[serde(default = "default_rsvp_chunk_size")]
+    pub rsvp_chunk_size: u8,
+    #[serde(default = "default_rsvp_dark_theme")]
+    pub rsvp_dark_theme: bool,
+    #[serde(default = "default_rsvp_show_context")]
+    pub rsvp_show_context: bool,
+    #[serde(default = "default_rsvp_audio_cue")]
+    pub rsvp_audio_cue: bool,
+    #[serde(default = "default_rsvp_auto_start")]
+    pub rsvp_auto_start: bool,
+    #[serde(default = "default_rsvp_remember_sections")]
+    pub rsvp_remember_sections: bool,
+    #[serde(default = "default_rsvp_remembered_sections")]
+    pub rsvp_remembered_sections: Vec<String>,
     #[serde(default)]
     pub custom_context_templates: Vec<ContextTemplate>,
     #[serde(default = "default_icd_version")]
@@ -367,6 +422,15 @@ mod tests {
         assert_eq!(config.lmstudio_host, "localhost");
         assert_eq!(config.lmstudio_port, 1234);
         assert!(config.vocabulary_enabled);
+        assert_eq!(config.rsvp_wpm, 300);
+        assert_eq!(config.rsvp_font_size, 48);
+        assert_eq!(config.rsvp_chunk_size, 1);
+        assert!(config.rsvp_dark_theme);
+        assert!(!config.rsvp_show_context);
+        assert!(!config.rsvp_audio_cue);
+        assert!(config.rsvp_auto_start);
+        assert!(!config.rsvp_remember_sections);
+        assert!(config.rsvp_remembered_sections.is_empty());
     }
 
     #[test]
