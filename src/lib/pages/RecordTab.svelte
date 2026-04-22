@@ -13,6 +13,7 @@
   import { upsertContextTemplate } from '../api/contextTemplates';
   import { contextTemplates } from '../stores/contextTemplates';
   import { toasts } from '../stores/toasts';
+  import { rsvp } from '../stores/rsvp';
 
   // Context panel state
   let contextText = $state('');
@@ -251,6 +252,22 @@
       copyStatus = 'idle';
     }
   }
+
+  async function handleSpeedRead() {
+    const rid = pipelineRecordingId;
+    if (!rid) return;
+    try {
+      const rec = await getRecording(rid);
+      if (rec?.soap_note) {
+        rsvp.openSoap(rec.soap_note);
+      } else {
+        toasts.error('No SOAP note to read yet.');
+      }
+    } catch (e) {
+      console.error('Failed to open speed reader:', e);
+      toasts.error(`Failed to open speed reader: ${e}`);
+    }
+  }
 </script>
 
 <div class="record-tab">
@@ -348,6 +365,7 @@
 
         {#if $pipeline.current.stage === 'completed'}
           <div class="post-actions">
+            <button class="btn-secondary" onclick={handleSpeedRead}>Speed Read</button>
             <button
               class="btn-primary"
               onclick={handleCopySoap}
