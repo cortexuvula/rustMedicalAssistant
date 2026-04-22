@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use std::time::Instant;
 
+use serde::Serialize;
 use tauri::Emitter;
 use tracing::{info, warn, instrument};
 use uuid::Uuid;
@@ -319,4 +321,105 @@ pub fn resume_recording(state: tauri::State<'_, AppState>) -> Result<(), String>
         }
         None => Err("No active recording to resume".into()),
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 7. check_recording_audio_levels
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Stats reported by `check_recording_audio_levels`.
+///
+/// `peak` is the maximum absolute sample value (0.0–1.0 for float PCM).
+/// `rms` is the root-mean-square level across all samples.
+/// `is_silent` is true when rms < 0.001 (about -60 dBFS) — a threshold at which
+/// Whisper tends to hallucinate rather than transcribe real content.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordingAudioLevels {
+    pub peak: f32,
+    pub rms: f32,
+    pub is_silent: bool,
+}
+
+#[tauri::command]
+pub async fn check_recording_audio_levels(
+    state: tauri::State<'_, AppState>,
+    recording_id: String,
+) -> Result<RecordingAudioLevels, String> {
+    let uuid = Uuid::parse_str(&recording_id).map_err(|e| format!("Invalid recording id: {e}"))?;
+
+    let db = Arc::clone(&state.db);
+    let recording = tokio::task::spawn_blocking(move || {
+        let conn = db.conn().map_err(|e| e.to_string())?;
+        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))??;
+
+    let wav_path = recording.audio_path.clone();
+    let levels = tokio::task::spawn_blocking(move || compute_audio_levels(&wav_path))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))??;
+
+    if levels.is_silent {
+        warn!(
+            recording_id = %recording_id,
+            peak = %format!("{:.6}", levels.peak),
+            rms = %format!("{:.6}", levels.rms),
+            "Recording flagged as silent by check_recording_audio_levels"
+        );
+    }
+    Ok(levels)
+}
+
+fn compute_audio_levels(path: &std::path::Path) -> Result<RecordingAudioLevels, String> {
+    let reader =
+        hound::WavReader::open(path).map_err(|e| format!("Failed to open WAV: {e}"))?;
+    let spec = reader.spec();
+
+    let (peak, sum_sq, count) = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            let mut peak = 0.0f32;
+            let mut sum_sq = 0.0f64;
+            let mut count: u64 = 0;
+            for sample in reader.into_samples::<f32>() {
+                let s = sample.map_err(|e| format!("Corrupt WAV sample: {e}"))?;
+                let abs = s.abs();
+                if abs > peak {
+                    peak = abs;
+                }
+                sum_sq += (s as f64) * (s as f64);
+                count += 1;
+            }
+            (peak, sum_sq, count)
+        }
+        hound::SampleFormat::Int => {
+            let max_val = (1u64 << (spec.bits_per_sample - 1)) as f32;
+            let mut peak = 0.0f32;
+            let mut sum_sq = 0.0f64;
+            let mut count: u64 = 0;
+            for sample in reader.into_samples::<i32>() {
+                let raw = sample.map_err(|e| format!("Corrupt WAV sample: {e}"))?;
+                let s = raw as f32 / max_val;
+                let abs = s.abs();
+                if abs > peak {
+                    peak = abs;
+                }
+                sum_sq += (s as f64) * (s as f64);
+                count += 1;
+            }
+            (peak, sum_sq, count)
+        }
+    };
+
+    let rms = if count == 0 {
+        0.0f32
+    } else {
+        (sum_sq / count as f64).sqrt() as f32
+    };
+
+    Ok(RecordingAudioLevels {
+        peak,
+        rms,
+        is_silent: count > 0 && rms < 0.001,
+    })
 }

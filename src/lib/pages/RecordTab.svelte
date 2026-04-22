@@ -4,8 +4,10 @@
   import { pipeline, type PipelineStage } from '../stores/pipeline';
   import { recordings } from '../stores/recordings';
   import { importAudioFile, getRecording } from '../api/recordings';
+  import { checkRecordingAudioLevels } from '../api/audio';
   import { copyToClipboard } from '../utils/clipboard';
   import RecordingHeader from '../components/RecordingHeader.svelte';
+  import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount } from 'svelte';
   import { upsertContextTemplate } from '../api/contextTemplates';
@@ -87,6 +89,11 @@
   // Track the recording ID the current pipeline status refers to
   let pipelineRecordingId = $state<string | null>(null);
 
+  // Silent-recording warning dialog state
+  let silenceDialogOpen = $state(false);
+  let silenceDialogRecordingId = $state<string | null>(null);
+  let silenceDialogMessage = $state('');
+
   function stageLabel(stage: PipelineStage): string {
     switch (stage) {
       case 'transcribing': return 'Transcribing audio...';
@@ -107,6 +114,59 @@
     audio.startRecording();
   }
 
+  function describeSilence(rms: number): string {
+    const rmsDb = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+    const formatted = isFinite(rmsDb) ? `${rmsDb.toFixed(1)} dBFS` : 'digital silence';
+    return (
+      `The recording appears to contain no audio (${formatted}). ` +
+      'Your microphone or audio routing likely isn’t capturing sound — ' +
+      'processing this file will probably produce an unreliable transcript.'
+    );
+  }
+
+  async function maybeLaunchPipeline(recordingId: string) {
+    try {
+      const levels = await checkRecordingAudioLevels(recordingId);
+      if (levels.is_silent) {
+        silenceDialogRecordingId = recordingId;
+        silenceDialogMessage = describeSilence(levels.rms);
+        silenceDialogOpen = true;
+        return;
+      }
+    } catch (_e) {
+      // If the silence check itself fails, don't block the pipeline.
+    }
+    pipeline.launch(recordingId, contextText || undefined);
+  }
+
+  async function warnIfSilent(recordingId: string) {
+    try {
+      const levels = await checkRecordingAudioLevels(recordingId);
+      if (levels.is_silent) {
+        silenceDialogRecordingId = recordingId;
+        silenceDialogMessage = describeSilence(levels.rms);
+        silenceDialogOpen = true;
+      }
+    } catch (_e) {
+      // Silent failure is fine — this is advisory only.
+    }
+  }
+
+  function confirmSilentProcess() {
+    const id = silenceDialogRecordingId;
+    silenceDialogOpen = false;
+    silenceDialogRecordingId = null;
+    if (id) {
+      pipelineRecordingId = id;
+      pipeline.launch(id, contextText || undefined);
+    }
+  }
+
+  function dismissSilenceDialog() {
+    silenceDialogOpen = false;
+    silenceDialogRecordingId = null;
+  }
+
   function handleStopRecording() {
     audio.stop().then(() => {
       const recordingId = $audio.lastRecordingId;
@@ -115,7 +175,9 @@
       pipelineRecordingId = recordingId;
 
       if ($settings.auto_generate_soap) {
-        pipeline.launch(recordingId, contextText || undefined);
+        maybeLaunchPipeline(recordingId);
+      } else {
+        warnIfSilent(recordingId);
       }
     });
   }
@@ -124,7 +186,7 @@
     const recordingId = $audio.lastRecordingId ?? importedRecordingId;
     if (!recordingId) return;
     pipelineRecordingId = recordingId;
-    pipeline.launch(recordingId, contextText || undefined);
+    maybeLaunchPipeline(recordingId);
   }
 
   function handleRetry() {
@@ -152,7 +214,7 @@
 
       if ($settings.auto_generate_soap) {
         pipelineRecordingId = recordingId;
-        pipeline.launch(recordingId, contextText || undefined);
+        maybeLaunchPipeline(recordingId);
       }
     } catch (e: any) {
       importError = e?.toString() || 'Import failed';
@@ -390,6 +452,17 @@
     </div>
   </div>
 {/if}
+
+<ConfirmDialog
+  open={silenceDialogOpen}
+  title="Silent recording detected"
+  message={silenceDialogMessage}
+  confirmLabel="Process anyway"
+  cancelLabel="Cancel"
+  danger
+  onConfirm={confirmSilentProcess}
+  onCancel={dismissSilenceDialog}
+/>
 
 <style>
   .record-tab {

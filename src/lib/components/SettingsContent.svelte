@@ -1350,8 +1350,8 @@
 
   .prompts-layout {
     display: grid;
-    grid-template-columns: 180px 1fr;
-    gap: 1.5rem;
+    grid-template-columns: 160px 1fr;
+    gap: 1.25rem;
     align-items: start;
     margin-top: 1rem;
   }

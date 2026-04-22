@@ -63,8 +63,8 @@
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     width: 100%;
-    max-width: 600px;
-    max-height: 80vh;
+    max-width: 960px;
+    max-height: 85vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;

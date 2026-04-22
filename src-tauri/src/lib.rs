@@ -135,6 +135,7 @@ pub fn run() {
             commands::audio::cancel_recording,
             commands::audio::pause_recording,
             commands::audio::resume_recording,
+            commands::audio::check_recording_audio_levels,
             commands::chat::chat_send,
             commands::chat::chat_stream,
             commands::chat::chat_with_agent,

@@ -24,3 +24,15 @@ export async function pauseRecording(): Promise<void> {
 export async function resumeRecording(): Promise<void> {
   return invoke('resume_recording');
 }
+
+export interface RecordingAudioLevels {
+  peak: number;
+  rms: number;
+  is_silent: boolean;
+}
+
+export async function checkRecordingAudioLevels(
+  recordingId: string,
+): Promise<RecordingAudioLevels> {
+  return invoke('check_recording_audio_levels', { recordingId });
+}
