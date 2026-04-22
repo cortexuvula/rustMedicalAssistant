@@ -182,6 +182,29 @@ impl RecordingsRepo {
         Ok(n as u32)
     }
 
+    /// Flip any recordings stuck in `Processing` state to `Failed` with the
+    /// given reason.  Called at app startup so prior-session crashes or hard
+    /// quits don't leave recordings permanently spinning.
+    ///
+    /// Returns the number of rows updated.
+    pub fn fail_stuck_processing(conn: &Connection, reason: &str) -> DbResult<u32> {
+        // Status is stored as serialized JSON tagged with `"status":"processing"`.
+        // Match the tag as a stable substring — cheaper than deserialising every row.
+        let failed = ProcessingStatus::Failed {
+            error: reason.to_string(),
+            retry_count: 0,
+        };
+        let failed_json =
+            serde_json::to_string(&failed).map_err(|e| DbError::Migration(e.to_string()))?;
+        let updated = conn.execute(
+            "UPDATE recordings
+             SET processing_status = ?1
+             WHERE processing_status LIKE '%\"status\":\"processing\"%'",
+            rusqlite::params![failed_json],
+        )?;
+        Ok(updated as u32)
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -338,5 +361,33 @@ mod tests {
         RecordingsRepo::insert(&conn, &rec).unwrap();
         let fetched = RecordingsRepo::get_by_id(&conn, &rec.id).unwrap();
         assert_eq!(fetched.tags, vec!["urgent", "follow-up"]);
+    }
+
+    #[test]
+    fn fail_stuck_processing_flips_matching_rows() {
+        let conn = migrated_conn();
+
+        // One Processing, one Pending, one already Completed.
+        let mut stuck = new_rec();
+        stuck.status = ProcessingStatus::Processing { started_at: Utc::now() };
+        let pending = new_rec();
+        let mut done = new_rec();
+        done.status = ProcessingStatus::Completed { completed_at: Utc::now() };
+
+        RecordingsRepo::insert(&conn, &stuck).unwrap();
+        RecordingsRepo::insert(&conn, &pending).unwrap();
+        RecordingsRepo::insert(&conn, &done).unwrap();
+
+        let n = RecordingsRepo::fail_stuck_processing(&conn, "app restarted").unwrap();
+        assert_eq!(n, 1);
+
+        let after = RecordingsRepo::get_by_id(&conn, &stuck.id).unwrap();
+        assert!(matches!(after.status, ProcessingStatus::Failed { .. }));
+
+        // Others untouched.
+        let p = RecordingsRepo::get_by_id(&conn, &pending.id).unwrap();
+        assert!(matches!(p.status, ProcessingStatus::Pending));
+        let c = RecordingsRepo::get_by_id(&conn, &done.id).unwrap();
+        assert!(matches!(c.status, ProcessingStatus::Completed { .. }));
     }
 }

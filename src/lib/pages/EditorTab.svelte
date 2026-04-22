@@ -22,13 +22,20 @@
       : null
   );
 
-  let copyStatus = $state<'idle' | 'copied'>('idle');
+  let copyStatus = $state<'idle' | 'copying' | 'copied'>('idle');
 
   async function handleCopy() {
+    if (copyStatus !== 'idle') return;
     if (!content) return;
-    await copyToClipboard(content);
-    copyStatus = 'copied';
-    setTimeout(() => { copyStatus = 'idle'; }, 2000);
+    copyStatus = 'copying';
+    try {
+      await copyToClipboard(content);
+      copyStatus = 'copied';
+      setTimeout(() => { copyStatus = 'idle'; }, 2000);
+    } catch (e) {
+      console.error('Failed to copy:', e);
+      copyStatus = 'idle';
+    }
   }
 </script>
 
@@ -45,8 +52,11 @@
         class="btn-copy"
         class:copied={copyStatus === 'copied'}
         onclick={handleCopy}
+        disabled={copyStatus !== 'idle'}
       >
-        {#if copyStatus === 'copied'}
+        {#if copyStatus === 'copying'}
+          Copying…
+        {:else if copyStatus === 'copied'}
           Copied!
         {:else}
           Copy

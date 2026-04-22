@@ -5,7 +5,7 @@ use futures_core::Stream;
 use reqwest::Client;
 
 use medical_core::{
-    error::AppResult,
+    error::{AppError, AppResult},
     traits::AiProvider,
     types::{CompletionRequest, CompletionResponse, ModelInfo, StreamChunk, ToolCompletionResponse, ToolDef},
 };
@@ -19,8 +19,11 @@ pub struct LmStudioProvider {
 impl LmStudioProvider {
     /// Create a new LM Studio provider.
     ///
-    /// `host` defaults to `http://localhost:1234` when `None`.
-    pub fn new(host: Option<&str>) -> Self {
+    /// `host` defaults to `http://localhost:1234` when `None`. Returns
+    /// `Err(AppError::AiProvider)` if the underlying reqwest client cannot be
+    /// constructed — callers can log and skip the provider instead of taking
+    /// the whole process down.
+    pub fn new(host: Option<&str>) -> AppResult<Self> {
         let base = host.unwrap_or("http://localhost:1234");
         let base_url = format!("{base}/v1");
         // No auth header for LM Studio (local server).
@@ -31,10 +34,10 @@ impl LmStudioProvider {
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(300))
             .build()
-            .expect("failed to build LM Studio HTTP client");
-        Self {
+            .map_err(|e| AppError::AiProvider(format!("Failed to build LM Studio HTTP client: {e}")))?;
+        Ok(Self {
             client: OpenAiCompatibleClient::new(http, base_url),
-        }
+        })
     }
 }
 
@@ -102,13 +105,13 @@ mod tests {
 
     #[test]
     fn creates_with_default_host() {
-        let p = LmStudioProvider::new(None);
+        let p = LmStudioProvider::new(None).expect("build default provider");
         assert_eq!(p.client.base_url, "http://localhost:1234/v1");
     }
 
     #[test]
     fn creates_with_custom_host() {
-        let p = LmStudioProvider::new(Some("http://192.168.1.10:1234"));
+        let p = LmStudioProvider::new(Some("http://192.168.1.10:1234")).expect("build custom provider");
         assert_eq!(p.client.base_url, "http://192.168.1.10:1234/v1");
     }
 }

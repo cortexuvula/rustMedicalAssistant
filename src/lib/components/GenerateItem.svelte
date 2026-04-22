@@ -5,7 +5,7 @@
     generating: boolean;
     anyGenerating: boolean;
     done: boolean;
-    copyStatus: 'idle' | 'copied' | undefined;
+    copyStatus: 'idle' | 'copying' | 'copied' | undefined;
     onGenerate: () => void;
     onCopy: () => void;
   }
@@ -39,8 +39,9 @@
           class="btn-copy"
           class:copied={copyStatus === 'copied'}
           onclick={onCopy}
+          disabled={copyStatus === 'copying' || copyStatus === 'copied'}
         >
-          {copyStatus === 'copied' ? 'Copied!' : 'Copy'}
+          {copyStatus === 'copying' ? 'Copying…' : copyStatus === 'copied' ? 'Copied!' : 'Copy'}
         </button>
         <button
           class="btn-regenerate"

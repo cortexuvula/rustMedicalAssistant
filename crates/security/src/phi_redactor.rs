@@ -50,11 +50,17 @@ lazy_static! {
             (r"(?:(?i)zip(?:\s+code)?|(?-i)\b[A-Z]{2}\b)\s+\d{5}(?:-\d{4})?", "[ZIP]"),
         ];
 
+        // Skip patterns that fail to compile rather than panicking. A typo in
+        // a hardcoded regex is caught by the unit tests below in CI; this
+        // fallback means an unlikely runtime failure degrades gracefully
+        // instead of killing the process on startup.
         defs.iter()
-            .map(|(pat, placeholder)| RedactionPattern {
-                regex: Regex::new(pat)
-                    .unwrap_or_else(|e| panic!("Invalid PHI regex `{}`: {}", pat, e)),
-                placeholder,
+            .filter_map(|(pat, placeholder)| match Regex::new(pat) {
+                Ok(regex) => Some(RedactionPattern { regex, placeholder }),
+                Err(e) => {
+                    tracing::error!("Invalid PHI regex `{pat}`: {e} — pattern skipped");
+                    None
+                }
             })
             .collect()
     };

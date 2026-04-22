@@ -3,16 +3,18 @@
 use std::time::{Duration, Instant};
 use reqwest::{Client, header};
 
+use medical_core::error::{AppError, AppResult};
+
 /// Build a reqwest client with Bearer-token auth.
 ///
-/// # Panics
-/// Panics if the API key contains characters that are invalid in HTTP header
-/// values (e.g. newlines, non-visible ASCII). This is a configuration error
-/// that should be caught at startup, not silently degraded.
-pub fn build_client(api_key: &str, timeout_secs: u64) -> reqwest::Result<Client> {
-    let mut auth_value =
-        header::HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .expect("API key contains invalid HTTP header characters");
+/// Returns `Err(AppError::AiProvider(...))` if the API key contains characters
+/// that are invalid in HTTP header values (newlines, raw control bytes) or if
+/// reqwest's builder fails — the caller decides how to surface that.
+pub fn build_client(api_key: &str, timeout_secs: u64) -> AppResult<Client> {
+    let mut auth_value = header::HeaderValue::from_str(&format!("Bearer {api_key}"))
+        .map_err(|_| {
+            AppError::AiProvider("API key contains characters invalid in HTTP headers".into())
+        })?;
     auth_value.set_sensitive(true);
 
     let mut headers = header::HeaderMap::new();
@@ -24,6 +26,7 @@ pub fn build_client(api_key: &str, timeout_secs: u64) -> reqwest::Result<Client>
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(timeout_secs))
         .build()
+        .map_err(|e| AppError::AiProvider(format!("Failed to build HTTP client: {e}")))
 }
 
 /// Build a reqwest client with a custom auth header.
@@ -31,12 +34,13 @@ pub fn build_client_custom_auth(
     header_name: &str,
     api_key: &str,
     timeout_secs: u64,
-) -> reqwest::Result<Client> {
+) -> AppResult<Client> {
     let header_name = header::HeaderName::from_bytes(header_name.as_bytes())
-        .expect("custom auth header name is invalid");
+        .map_err(|_| AppError::AiProvider(format!("Invalid auth header name: {header_name:?}")))?;
 
-    let mut header_value = header::HeaderValue::from_str(api_key)
-        .expect("API key contains invalid HTTP header characters");
+    let mut header_value = header::HeaderValue::from_str(api_key).map_err(|_| {
+        AppError::AiProvider("API key contains characters invalid in HTTP headers".into())
+    })?;
     header_value.set_sensitive(true);
 
     let mut headers = header::HeaderMap::new();
@@ -48,6 +52,7 @@ pub fn build_client_custom_auth(
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(timeout_secs))
         .build()
+        .map_err(|e| AppError::AiProvider(format!("Failed to build HTTP client: {e}")))
 }
 
 /// Configuration for exponential-backoff retry logic.

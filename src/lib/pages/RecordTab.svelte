@@ -229,21 +229,26 @@
     }
   }
 
-  let copyStatus = $state<'idle' | 'copied'>('idle');
+  let copyStatus = $state<'idle' | 'copying' | 'copied'>('idle');
 
   async function handleCopySoap() {
+    if (copyStatus !== 'idle') return;
     const rid = pipelineRecordingId;
     if (!rid) return;
+    copyStatus = 'copying';
     try {
       const rec = await getRecording(rid);
       if (rec?.soap_note) {
         await copyToClipboard(rec.soap_note);
         copyStatus = 'copied';
         setTimeout(() => { copyStatus = 'idle'; }, 2000);
+      } else {
+        copyStatus = 'idle';
       }
     } catch (e) {
       console.error('Failed to copy SOAP note:', e);
       toasts.error(`Failed to copy SOAP note: ${e}`);
+      copyStatus = 'idle';
     }
   }
 </script>
@@ -343,8 +348,12 @@
 
         {#if $pipeline.current.stage === 'completed'}
           <div class="post-actions">
-            <button class="btn-primary" onclick={handleCopySoap}>
-              {copyStatus === 'copied' ? 'Copied!' : 'Copy SOAP Note'}
+            <button
+              class="btn-primary"
+              onclick={handleCopySoap}
+              disabled={copyStatus !== 'idle'}
+            >
+              {copyStatus === 'copying' ? 'Copying…' : copyStatus === 'copied' ? 'Copied!' : 'Copy SOAP Note'}
             </button>
           </div>
         {/if}

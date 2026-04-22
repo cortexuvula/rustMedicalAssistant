@@ -5315,7 +5315,7 @@ dependencies = [
 
 [[package]]
 name = "rust-medical-assistant"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "chrono",
  "dirs",

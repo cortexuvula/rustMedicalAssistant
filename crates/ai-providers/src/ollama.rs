@@ -5,7 +5,7 @@ use futures_core::Stream;
 use reqwest::Client;
 
 use medical_core::{
-    error::AppResult,
+    error::{AppError, AppResult},
     traits::AiProvider,
     types::{CompletionRequest, CompletionResponse, ModelInfo, StreamChunk, ToolCompletionResponse, ToolDef},
 };
@@ -19,8 +19,10 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     /// Create a new Ollama provider.
     ///
-    /// `host` defaults to `http://localhost:11434` when `None`.
-    pub fn new(host: Option<&str>) -> Self {
+    /// `host` defaults to `http://localhost:11434` when `None`. Returns
+    /// `Err(AppError::AiProvider)` if the reqwest client can't be built
+    /// rather than panicking.
+    pub fn new(host: Option<&str>) -> AppResult<Self> {
         let base = host.unwrap_or("http://localhost:11434");
         let base_url = format!("{base}/v1");
         // No auth header for Ollama.
@@ -31,10 +33,10 @@ impl OllamaProvider {
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(300))
             .build()
-            .expect("failed to build Ollama HTTP client");
-        Self {
+            .map_err(|e| AppError::AiProvider(format!("Failed to build Ollama HTTP client: {e}")))?;
+        Ok(Self {
             client: OpenAiCompatibleClient::new(http, base_url),
-        }
+        })
     }
 }
 
@@ -102,13 +104,13 @@ mod tests {
 
     #[test]
     fn creates_with_default_host() {
-        let p = OllamaProvider::new(None);
+        let p = OllamaProvider::new(None).expect("build default provider");
         assert_eq!(p.client.base_url, "http://localhost:11434/v1");
     }
 
     #[test]
     fn creates_with_custom_host() {
-        let p = OllamaProvider::new(Some("http://192.168.1.10:11434"));
+        let p = OllamaProvider::new(Some("http://192.168.1.10:11434")).expect("build custom provider");
         assert_eq!(p.client.base_url, "http://192.168.1.10:11434/v1");
     }
 }

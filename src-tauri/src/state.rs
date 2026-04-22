@@ -17,6 +17,7 @@ use medical_agents::tools::{RagSearchTool, ToolRegistry};
 
 use medical_audio::capture::CaptureHandle;
 
+use medical_db::recordings::RecordingsRepo;
 use medical_db::Database;
 
 use medical_rag::bm25::Bm25Search;
@@ -34,16 +35,37 @@ use medical_core::traits::SttProvider;
 
 /// Wrapper to make `CaptureHandle` usable across threads.
 ///
-/// `CaptureHandle` holds a `cpal::Stream` which is marked `!Send` on some
-/// platforms as a conservative safety measure.  In practice the handle's
-/// `pause`/`resume`/`stop` methods only set atomic flags or join a thread,
-/// so cross-thread access is safe.  We gate all access behind a
-/// `std::sync::Mutex` to serialize callers.
+/// `CaptureHandle` holds a `cpal::Stream`, which cpal marks `!Send` on every
+/// platform as a defensive measure — the underlying audio APIs are actually
+/// thread-safe on each of the three desktop platforms we target:
+///
+/// * **macOS (CoreAudio):** `AudioUnit*` APIs are documented as thread-safe
+///   since 10.13; audio callbacks already run on a dedicated real-time thread
+///   and `AudioOutputUnitStop` / `AudioUnitUninitialize` can be invoked from
+///   any thread.
+/// * **Windows (WASAPI):** `IAudioClient::Stop` and `Release` can be called
+///   from any thread; the stream is stopped before any cross-thread drop.
+/// * **Linux (ALSA):** `snd_pcm_drop` / `snd_pcm_close` are documented as safe
+///   from any thread so long as the handle is only touched by one caller at a
+///   time.
+///
+/// Our invariants:
+/// * All access to `CaptureHandle`'s methods (`pause`/`resume`, `Drop`) is
+///   serialised through `AppState::capture_handle` (a `std::sync::Mutex`),
+///   so no two threads ever reach the inner FFI simultaneously.
+/// * The handle is moved to a `tokio::task::spawn_blocking` worker before
+///   being dropped, so the potentially-blocking drain-thread join never
+///   happens on the async runtime's worker threads.
+///
+/// Given those, marking the wrapper `Send + Sync` is sound. If a future
+/// refactor removes the mutex guard or introduces parallel access, revisit
+/// this.
 pub struct SendCaptureHandle(pub Option<CaptureHandle>);
 
-// SAFETY: Access is serialized through a std::sync::Mutex in AppState.
-// The CaptureHandle methods (pause/resume/stop) only touch AtomicBool flags
-// and a JoinHandle, which are inherently thread-safe.
+// SAFETY: see the doc comment above. Access is serialised through the
+// `AppState::capture_handle` Mutex; the underlying platform audio APIs are
+// thread-safe on macOS/Windows/Linux; and the !Send marker on cpal::Stream
+// is defensive rather than reflecting a real platform constraint.
 unsafe impl Send for SendCaptureHandle {}
 unsafe impl Sync for SendCaptureHandle {}
 
@@ -85,15 +107,27 @@ pub struct AppState {
 pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     let mut registry = ProviderRegistry::new();
 
-    // Ollama — always available (local, no key needed)
-    info!("Registering Ollama provider (local)");
-    registry.register(Arc::new(OllamaProvider::new(None)));
+    // Ollama — always available (local, no key needed).
+    // Builder failures are logged and the provider skipped rather than
+    // crashing startup, so a weird system HTTP config doesn't brick the app.
+    match OllamaProvider::new(None) {
+        Ok(p) => {
+            info!("Registering Ollama provider (local)");
+            registry.register(Arc::new(p));
+        }
+        Err(e) => tracing::error!(error = %e, "Failed to build Ollama provider; skipping"),
+    }
 
     // LM Studio — always available (local or remote, no key needed)
     let lmstudio_host = if config.lmstudio_host.is_empty() { "localhost" } else { &config.lmstudio_host };
     let lmstudio_url = format!("http://{}:{}", lmstudio_host, config.lmstudio_port);
-    info!(url = %lmstudio_url, "Registering LM Studio provider");
-    registry.register(Arc::new(LmStudioProvider::new(Some(&lmstudio_url))));
+    match LmStudioProvider::new(Some(&lmstudio_url)) {
+        Ok(p) => {
+            info!(url = %lmstudio_url, "Registering LM Studio provider");
+            registry.register(Arc::new(p));
+        }
+        Err(e) => tracing::error!(error = %e, url = %lmstudio_url, "Failed to build LM Studio provider; skipping"),
+    }
 
     info!("AI providers available: {:?}", registry.list_available());
     registry
@@ -129,6 +163,20 @@ impl AppState {
         let db_path = data_dir.join("medical.db");
         let db = Database::open(&db_path)?;
         let db = Arc::new(db);
+
+        // Flip any recordings that were Processing when the previous run ended
+        // (crash, hard-quit, SIGKILL) to Failed so the UI doesn't show them
+        // spinning forever.  Best-effort: a DB hiccup here shouldn't block boot.
+        if let Ok(conn) = db.conn() {
+            match RecordingsRepo::fail_stuck_processing(
+                &conn,
+                "Processing interrupted — app was closed before the pipeline finished.",
+            ) {
+                Ok(0) => {}
+                Ok(n) => info!("Marked {n} stuck Processing recording(s) as Failed on boot"),
+                Err(e) => tracing::warn!("fail_stuck_processing on boot failed: {e}"),
+            }
+        }
 
         let config_dir = data_dir.join("config");
         let keys = KeyStorage::open(&config_dir)?;

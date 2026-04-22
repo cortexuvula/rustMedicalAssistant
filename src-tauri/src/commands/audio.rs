@@ -141,6 +141,16 @@ pub async fn start_recording(
     );
 
     // Spawn a blocking task to consume waveform data and emit Tauri events.
+    //
+    // Lifecycle: this task exits when `waveform_rx.recv()` returns `Err`, which
+    // happens when every `waveform_tx` sender has been dropped. The only
+    // sender lives inside the capture drain thread (see `crates/audio/src/
+    // capture.rs`); that thread exits when the `CaptureHandle` is dropped —
+    // which `stop_recording` / `cancel_recording` do synchronously before
+    // returning. So by the time the next `start_recording` could run, the
+    // previous emit task has already unwound. No JoinHandle needed, but the
+    // invariant is load-bearing: if you change the sender ownership in
+    // capture.rs, revisit this site.
     let app_clone = app.clone();
     tokio::task::spawn_blocking(move || {
         while let Ok(data) = waveform_rx.recv() {

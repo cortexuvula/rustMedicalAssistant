@@ -5,7 +5,7 @@
   import { copyToClipboard } from '../utils/clipboard';
   import GenerateItem from '../components/GenerateItem.svelte';
 
-  let copyStatus = $state<Record<string, 'idle' | 'copied'>>({});
+  let copyStatus = $state<Record<string, 'idle' | 'copying' | 'copied'>>({});
   let contextText = $state('');
   let contextExpanded = $state(false);
   // Track which recording ID we last loaded context for, so we only
@@ -41,14 +41,21 @@
   }
 
   async function handleCopy(type: string) {
+    if (copyStatus[type] && copyStatus[type] !== 'idle') return;
     if (!$selectedRecording) return;
     const text = type === 'soap' ? $selectedRecording.soap_note
       : type === 'referral' ? $selectedRecording.referral
       : $selectedRecording.letter;
     if (!text) return;
-    await copyToClipboard(text);
-    copyStatus = { ...copyStatus, [type]: 'copied' };
-    setTimeout(() => { copyStatus = { ...copyStatus, [type]: 'idle' }; }, 2000);
+    copyStatus = { ...copyStatus, [type]: 'copying' };
+    try {
+      await copyToClipboard(text);
+      copyStatus = { ...copyStatus, [type]: 'copied' };
+      setTimeout(() => { copyStatus = { ...copyStatus, [type]: 'idle' }; }, 2000);
+    } catch (e) {
+      console.error('Failed to copy:', e);
+      copyStatus = { ...copyStatus, [type]: 'idle' };
+    }
   }
 
   async function handleGenerate(type: 'soap' | 'referral' | 'letter') {
