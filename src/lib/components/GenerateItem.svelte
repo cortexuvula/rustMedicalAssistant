@@ -8,6 +8,7 @@
     copyStatus: 'idle' | 'copying' | 'copied' | undefined;
     onGenerate: () => void;
     onCopy: () => void;
+    onSpeedRead?: () => void;
   }
 
   let {
@@ -19,6 +20,7 @@
     copyStatus,
     onGenerate,
     onCopy,
+    onSpeedRead,
   }: Props = $props();
 </script>
 
@@ -43,6 +45,15 @@
         >
           {copyStatus === 'copying' ? 'Copying…' : copyStatus === 'copied' ? 'Copied!' : 'Copy'}
         </button>
+        {#if onSpeedRead}
+          <button
+            class="btn-copy"
+            onclick={onSpeedRead}
+            title="Speed Read (Cmd/Ctrl+Shift+R)"
+          >
+            Speed Read
+          </button>
+        {/if}
         <button
           class="btn-regenerate"
           onclick={onGenerate}

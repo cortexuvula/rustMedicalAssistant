@@ -4,6 +4,8 @@
   import { generation } from '../stores/generation';
   import { copyToClipboard } from '../utils/clipboard';
   import GenerateItem from '../components/GenerateItem.svelte';
+  import { rsvp } from '../stores/rsvp';
+  import type { DocKind } from '../stores/rsvp';
 
   let copyStatus = $state<Record<string, 'idle' | 'copying' | 'copied'>>({});
   let contextText = $state('');
@@ -55,6 +57,19 @@
     } catch (e) {
       console.error('Failed to copy:', e);
       copyStatus = { ...copyStatus, [type]: 'idle' };
+    }
+  }
+
+  function handleSpeedRead(type: string) {
+    if (!$selectedRecording) return;
+    const text = type === 'soap' ? $selectedRecording.soap_note
+      : type === 'referral' ? $selectedRecording.referral
+      : $selectedRecording.letter;
+    if (!text) return;
+    if (type === 'soap') {
+      rsvp.openSoap(text);
+    } else {
+      rsvp.openGeneric(text, type as DocKind);
     }
   }
 
@@ -161,6 +176,7 @@
           copyStatus={copyStatus['soap']}
           onGenerate={() => handleGenerate('soap')}
           onCopy={() => handleCopy('soap')}
+          onSpeedRead={() => handleSpeedRead('soap')}
         />
         <GenerateItem
           title="Referral Letter"
@@ -171,6 +187,7 @@
           copyStatus={copyStatus['referral']}
           onGenerate={() => handleGenerate('referral')}
           onCopy={() => handleCopy('referral')}
+          onSpeedRead={() => handleSpeedRead('referral')}
         />
         <GenerateItem
           title="Patient Letter"
@@ -181,6 +198,7 @@
           copyStatus={copyStatus['letter']}
           onGenerate={() => handleGenerate('letter')}
           onCopy={() => handleCopy('letter')}
+          onSpeedRead={() => handleSpeedRead('letter')}
         />
       </div>
     </div>
