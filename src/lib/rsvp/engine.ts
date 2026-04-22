@@ -49,3 +49,41 @@ export function delayMs(token: Token, base: number): number {
     1.0;
   return Math.round(base * multiplier);
 }
+
+const SOAP_HEADER_NAMES = [
+  'subjective',
+  'objective',
+  'assessment',
+  'plan',
+  'differential diagnosis',
+  'follow up',
+  'follow-up',
+  'clinical synopsis',
+];
+
+/** Matches leading markdown emphasis (*, **, _, __) that LLMs sometimes add. */
+const LEADING_EMPHASIS = /^[*_]+/u;
+const TRAILING_EMPHASIS = /[*_]+$/u;
+
+function isHeaderWord(word: string): boolean {
+  const stripped = word.replace(LEADING_EMPHASIS, '').replace(TRAILING_EMPHASIS, '');
+  if (!stripped.endsWith(':')) return false;
+  const name = stripped.slice(0, -1).toLowerCase().trim();
+  return SOAP_HEADER_NAMES.includes(name);
+}
+
+function classify(word: string): TokenKind {
+  if (isHeaderWord(word)) return 'header';
+  const lastChar = word[word.length - 1];
+  if (lastChar === '.' || lastChar === '!' || lastChar === '?') return 'sentence';
+  if (lastChar === ',' || lastChar === ';' || lastChar === ':') return 'clause';
+  return 'word';
+}
+
+/** Split `text` into whitespace-separated tokens, each classified by trailing punctuation. */
+export function tokenize(text: string): Token[] {
+  return text
+    .split(/\s+/u)
+    .filter((w) => w.length > 0)
+    .map((word) => ({ word, kind: classify(word) }));
+}
