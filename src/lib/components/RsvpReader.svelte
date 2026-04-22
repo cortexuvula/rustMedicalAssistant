@@ -1,44 +1,185 @@
 <script lang="ts">
-  import { rsvp } from '../stores/rsvp';
-  import { settings } from '../stores/settings';
-  import {
-    tokenize,
-    orpIndex,
-    type Token,
-  } from '../rsvp/engine';
+import { onMount, onDestroy } from 'svelte';
+import { rsvp } from '../stores/rsvp';
+import { settings } from '../stores/settings';
+import {
+  tokenize,
+  orpIndex,
+  baseDelayMs,
+  delayMs,
+  type Token,
+} from '../rsvp/engine';
 
-  let tokens = $state<Token[]>([]);
-  let index = $state(0);
+let tokens = $state<Token[]>([]);
+let index = $state(0);
+let playing = $state(false);
+let startedAt = $state(0);
+let elapsedBeforePause = $state(0);
+let timerHandle: ReturnType<typeof setTimeout> | null = null;
 
-  $effect(() => {
-    if (!$rsvp.reader.open) return;
-    tokens = tokenize($rsvp.reader.text);
-    index = 0;
-  });
-
-  // Current word (or chunk) to display.
-  function currentWords(): Token[] {
-    const chunk = $settings.rsvp_chunk_size || 1;
-    return tokens.slice(index, index + chunk);
+$effect(() => {
+  if (!$rsvp.reader.open) return;
+  tokens = tokenize($rsvp.reader.text);
+  index = 0;
+  playing = false;
+  startedAt = 0;
+  elapsedBeforePause = 0;
+  if ($settings.rsvp_auto_start) {
+    setTimeout(() => { play(); }, 500);
   }
+});
 
-  function splitOrp(word: string): { pre: string; orp: string; post: string } {
-    const i = orpIndex(word);
-    return {
-      pre: word.slice(0, i),
-      orp: word[i] ?? '',
-      post: word.slice(i + 1),
-    };
+function currentWords(): Token[] {
+  const chunk = $settings.rsvp_chunk_size || 1;
+  return tokens.slice(index, index + chunk);
+}
+
+function splitOrp(word: string): { pre: string; orp: string; post: string } {
+  const i = orpIndex(word);
+  return {
+    pre: word.slice(0, i),
+    orp: word[i] ?? '',
+    post: word.slice(i + 1),
+  };
+}
+
+function scheduleNext(): void {
+  if (!playing) return;
+  if (index >= tokens.length) {
+    playing = false;
+    return;
   }
+  const chunk = $settings.rsvp_chunk_size || 1;
+  const midToken = tokens[Math.min(index + Math.floor(chunk / 2), tokens.length - 1)];
+  const ms = delayMs(midToken, baseDelayMs($settings.rsvp_wpm || 300));
+  timerHandle = setTimeout(() => {
+    index = Math.min(index + chunk, tokens.length);
+    scheduleNext();
+  }, ms);
+}
 
-  function close(): void {
-    rsvp.closeAll();
+function clearTimer(): void {
+  if (timerHandle !== null) {
+    clearTimeout(timerHandle);
+    timerHandle = null;
   }
+}
 
-  // Font size for the stage; chunks shrink to fit.
-  let stageFont = $derived(
-    ($settings.rsvp_font_size ?? 48) - (($settings.rsvp_chunk_size ?? 1) > 1 ? 8 : 0),
-  );
+function play(): void {
+  if (index >= tokens.length) index = 0;
+  playing = true;
+  startedAt = Date.now();
+  scheduleNext();
+}
+
+function pause(): void {
+  playing = false;
+  clearTimer();
+  elapsedBeforePause += Date.now() - startedAt;
+}
+
+function togglePlay(): void {
+  if (playing) pause(); else play();
+}
+
+function stepForward(): void {
+  pause();
+  const chunk = $settings.rsvp_chunk_size || 1;
+  index = Math.min(index + chunk, tokens.length);
+}
+
+function stepBack(): void {
+  pause();
+  const chunk = $settings.rsvp_chunk_size || 1;
+  index = Math.max(0, index - chunk);
+}
+
+function goHome(): void {
+  pause();
+  index = 0;
+  elapsedBeforePause = 0;
+}
+
+function goEnd(): void {
+  pause();
+  index = tokens.length;
+}
+
+function bumpWpm(delta: number): void {
+  const next = Math.max(50, Math.min(2000, ($settings.rsvp_wpm || 300) + delta));
+  settings.updateField('rsvp_wpm', next);
+}
+
+function setChunk(n: number): void {
+  settings.updateField('rsvp_chunk_size', n);
+}
+
+function toggleTheme(): void {
+  settings.updateField('rsvp_dark_theme', !$settings.rsvp_dark_theme);
+}
+
+function toggleContext(): void {
+  settings.updateField('rsvp_show_context', !$settings.rsvp_show_context);
+}
+
+function close(): void {
+  pause();
+  rsvp.closeAll();
+}
+
+function onKeydown(e: KeyboardEvent): void {
+  if (!$rsvp.reader.open) return;
+  switch (e.key) {
+    case ' ': e.preventDefault(); togglePlay(); break;
+    case 'ArrowLeft': e.preventDefault(); stepBack(); break;
+    case 'ArrowRight': e.preventDefault(); stepForward(); break;
+    case 'ArrowUp': e.preventDefault(); bumpWpm(25); break;
+    case 'ArrowDown': e.preventDefault(); bumpWpm(-25); break;
+    case 'Home': e.preventDefault(); goHome(); break;
+    case 'End': e.preventDefault(); goEnd(); break;
+    case '1': setChunk(1); break;
+    case '2': setChunk(2); break;
+    case '3': setChunk(3); break;
+    case 't':
+    case 'T':
+      toggleTheme();
+      break;
+    case 'Escape':
+      e.preventDefault();
+      close();
+      break;
+  }
+}
+
+onMount(() => {
+  window.addEventListener('keydown', onKeydown);
+});
+
+onDestroy(() => {
+  window.removeEventListener('keydown', onKeydown);
+  clearTimer();
+});
+
+let stageFont = $derived(
+  ($settings.rsvp_font_size ?? 48) - (($settings.rsvp_chunk_size ?? 1) > 1 ? 8 : 0),
+);
+
+let progressPct = $derived(
+  tokens.length === 0 ? 0 : Math.round((index / tokens.length) * 100),
+);
+
+let etaSecs = $derived(
+  Math.max(
+    0,
+    Math.round(((tokens.length - index) * 60) / ($settings.rsvp_wpm || 300)),
+  ),
+);
+
+function formatEta(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 </script>
 
 {#if $rsvp.reader.open}
@@ -55,20 +196,83 @@
       </div>
 
       <div class="stage" style="font-size: {stageFont}px;">
-        {#each currentWords() as tok, i}
-          {#if i === Math.floor(currentWords().length / 2)}
-            {@const parts = splitOrp(tok.word)}
-            <span class="word orp-word">
-              <span class="pre">{parts.pre}</span><span class="orp">{parts.orp}</span><span class="post">{parts.post}</span>
-            </span>
-          {:else}
-            <span class="word">{tok.word}</span>
-          {/if}
-        {/each}
+        {#if tokens.length === 0}
+          <span class="empty">Nothing to read.</span>
+        {:else if index >= tokens.length}
+          <span class="empty">Done.</span>
+        {:else}
+          {#each currentWords() as tok, i}
+            {#if i === Math.floor(currentWords().length / 2)}
+              {@const parts = splitOrp(tok.word)}
+              <span class="word orp-word">
+                <span class="pre">{parts.pre}</span><span class="orp">{parts.orp}</span><span class="post">{parts.post}</span>
+              </span>
+            {:else}
+              <span class="word">{tok.word}</span>
+            {/if}
+          {/each}
+        {/if}
       </div>
 
-      <div class="progress">
-        {index} / {tokens.length}
+      <div class="progress-row">
+        <div class="bar"><div class="fill" style="width: {progressPct}%"></div></div>
+        <span class="count">{index} / {tokens.length}</span>
+        <span class="eta">{formatEta(etaSecs)}</span>
+      </div>
+
+      <div class="controls">
+        <button onclick={goHome} title="Restart (Home)">⏮</button>
+        <button onclick={stepBack} title="Previous (←)">◀</button>
+        <button onclick={togglePlay} title="Play / Pause (Space)">
+          {playing ? '❚❚' : '▶'}
+        </button>
+        <button onclick={stepForward} title="Next (→)">▶</button>
+        <button onclick={goEnd} title="Skip to end (End)">⏭</button>
+
+        <div class="sep"></div>
+
+        <label title="Words per minute (↑/↓)">
+          WPM
+          <input
+            type="range"
+            min="50"
+            max="2000"
+            step="25"
+            value={$settings.rsvp_wpm}
+            oninput={(e) => settings.updateField('rsvp_wpm', Number((e.currentTarget as HTMLInputElement).value))}
+          />
+          <span class="num">{$settings.rsvp_wpm}</span>
+        </label>
+
+        <label title="Font size">
+          Font
+          <input
+            type="range"
+            min="24"
+            max="96"
+            step="2"
+            value={$settings.rsvp_font_size}
+            oninput={(e) => settings.updateField('rsvp_font_size', Number((e.currentTarget as HTMLInputElement).value))}
+          />
+        </label>
+
+        <div class="chunk-group" title="Chunk size (1/2/3)">
+          {#each [1, 2, 3] as n}
+            <button
+              class:active={$settings.rsvp_chunk_size === n}
+              onclick={() => setChunk(n)}
+            >{n}</button>
+          {/each}
+        </div>
+
+        <button onclick={toggleTheme} title="Theme (T)">
+          {$settings.rsvp_dark_theme ? '☀' : '☾'}
+        </button>
+        <button
+          class:active={$settings.rsvp_show_context}
+          onclick={toggleContext}
+          title="Show context sentence"
+        >Ctx</button>
       </div>
     </div>
   </div>
@@ -134,5 +338,73 @@
     text-align: center;
     color: var(--text-secondary);
     font-size: 0.9rem;
+  }
+
+  .empty {
+    color: var(--text-secondary);
+    font-size: 1rem;
+    font-weight: 400;
+    font-family: inherit;
+  }
+
+  .progress-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+  .bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    background: var(--accent, #4a9eff);
+    transition: width 0.1s linear;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .controls button {
+    background: var(--bg-secondary);
+    color: inherit;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    min-width: 36px;
+  }
+  .controls button:hover { background: var(--bg-hover); }
+  .controls button.active {
+    background: var(--accent, #4a9eff);
+    color: white;
+    border-color: var(--accent, #4a9eff);
+  }
+  .controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+  .controls .num { min-width: 3ch; text-align: right; }
+  .chunk-group { display: inline-flex; gap: 2px; }
+  .chunk-group button { border-radius: 0; }
+  .chunk-group button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+  .chunk-group button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+  .sep {
+    width: 1px;
+    height: 24px;
+    background: var(--border);
+    margin: 0 4px;
   }
 </style>
