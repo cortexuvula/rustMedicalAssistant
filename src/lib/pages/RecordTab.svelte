@@ -12,6 +12,7 @@
   import { onMount } from 'svelte';
   import { upsertContextTemplate } from '../api/contextTemplates';
   import { contextTemplates } from '../stores/contextTemplates';
+  import { toasts } from '../stores/toasts';
 
   // Context panel state
   let contextText = $state('');
@@ -194,6 +195,11 @@
     pipeline.retry(pipelineRecordingId, contextText || undefined);
   }
 
+  function handleCancelPipeline() {
+    if (!pipelineRecordingId) return;
+    pipeline.cancel(pipelineRecordingId);
+  }
+
   async function handleUploadAudio() {
     importError = null;
     try {
@@ -237,6 +243,7 @@
       }
     } catch (e) {
       console.error('Failed to copy SOAP note:', e);
+      toasts.error(`Failed to copy SOAP note: ${e}`);
     }
   }
 </script>
@@ -327,6 +334,12 @@
         </div>
 
         <p class="pipeline-label">{stageLabel($pipeline.current.stage)}</p>
+
+        {#if ['transcribing', 'generating_soap'].includes($pipeline.current.stage)}
+          <div class="post-actions">
+            <button class="btn-secondary" onclick={handleCancelPipeline}>Cancel</button>
+          </div>
+        {/if}
 
         {#if $pipeline.current.stage === 'completed'}
           <div class="post-actions">
@@ -610,6 +623,26 @@
   .btn-primary:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 24px;
+    background-color: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+    border-color: var(--accent);
   }
 
   /* Pipeline Status */

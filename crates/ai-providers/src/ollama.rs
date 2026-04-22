@@ -24,10 +24,12 @@ impl OllamaProvider {
         let base = host.unwrap_or("http://localhost:11434");
         let base_url = format!("{base}/v1");
         // No auth header for Ollama.
+        // Matches the LM Studio bound — local model inference can legitimately
+        // take several minutes on long prompts and we'd rather not kill it.
         let http = Client::builder()
             .pool_max_idle_per_host(5)
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("failed to build Ollama HTTP client");
         Self {

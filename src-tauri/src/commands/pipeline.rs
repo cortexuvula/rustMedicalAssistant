@@ -1,10 +1,11 @@
 //! Background pipeline: transcribe → generate SOAP in one command.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::Emitter;
-use tracing::{info, error, instrument};
+use tracing::{info, error, instrument, warn};
 use uuid::Uuid;
 
 use medical_db::recordings::RecordingsRepo;
@@ -38,6 +39,18 @@ pub async fn process_recording(
         "Pipeline started: transcribe → SOAP"
     );
     let rid = recording_id.clone();
+
+    // Register a cancel flag so the frontend can ask us to bail between stages.
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut guard = state.pipeline_cancels.lock().unwrap();
+        guard.insert(recording_id.clone(), Arc::clone(&cancel));
+    }
+    // Ensure the flag is removed on every exit path.
+    let _cancel_guard = CancelGuard {
+        cancels: Arc::clone(&state.pipeline_cancels),
+        key: recording_id.clone(),
+    };
 
     // If no explicit template, read the user's preferred template from settings.
     let template = match template {
@@ -83,6 +96,13 @@ pub async fn process_recording(
     }
 
     info!("Pipeline stage 1 complete: transcription succeeded");
+
+    if cancel.load(Ordering::SeqCst) {
+        let msg = "Pipeline cancelled by user after transcription".to_string();
+        warn!("{msg}");
+        emit_progress(&app, &rid, "failed", Some(msg.clone()));
+        return Err(msg);
+    }
 
     // --- Stage 2: Generate SOAP ---
     emit_progress(&app, &rid, "generating_soap", None);
@@ -149,4 +169,43 @@ async fn get_recording_display_name(state: &AppState, recording_id: &str) -> Str
     .ok()
     .flatten()
     .unwrap_or_else(|| "Recording".to_string())
+}
+
+/// RAII helper: remove the cancel flag from the map when the pipeline exits
+/// (success, error, or panic unwind) so we don't leak entries.
+struct CancelGuard {
+    cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
+    key: String,
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.cancels.lock() {
+            guard.remove(&self.key);
+        }
+    }
+}
+
+/// Signal a running pipeline to cancel at its next stage boundary.
+///
+/// Returns `true` if a pipeline with that id was found and flagged, `false`
+/// if no pipeline was registered under that recording id. Does not kill an
+/// in-flight HTTP call — cancellation takes effect between transcription and
+/// SOAP generation, or when the current network timeout fires.
+#[tauri::command]
+pub fn cancel_pipeline(
+    state: tauri::State<'_, AppState>,
+    recording_id: String,
+) -> Result<bool, String> {
+    let guard = state
+        .pipeline_cancels
+        .lock()
+        .map_err(|_| "pipeline_cancels mutex poisoned".to_string())?;
+    if let Some(flag) = guard.get(&recording_id) {
+        flag.store(true, Ordering::SeqCst);
+        info!(recording_id = %recording_id, "Pipeline cancel requested");
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { recordings, loading, selectedRecording, selectRecording } from '../stores/recordings';
+  import { toasts } from '../stores/toasts';
   import SearchBar from '../components/SearchBar.svelte';
   import RecordingCard from '../components/RecordingCard.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
@@ -22,6 +23,7 @@
       await recordings.remove(deleteTarget.id);
     } catch (err) {
       console.error('Failed to delete recording:', err);
+      toasts.error(`Failed to delete recording: ${err}`);
     } finally {
       deleteTarget = null;
     }
@@ -32,6 +34,7 @@
       await recordings.removeAll();
     } catch (err) {
       console.error('Failed to delete all recordings:', err);
+      toasts.error(`Failed to delete all recordings: ${err}`);
     } finally {
       showDeleteAll = false;
     }

@@ -36,6 +36,16 @@ function createToastStore() {
     dismiss(id: string) {
       update((toasts) => toasts.filter((t) => t.id !== id));
     },
+
+    /** Convenience: show an error toast that persists until dismissed. */
+    error(message: string) {
+      return this.add({ message, type: 'error', autoDismiss: false });
+    },
+
+    /** Convenience: show a success toast that auto-dismisses. */
+    success(message: string) {
+      return this.add({ message, type: 'success', autoDismiss: true });
+    },
   };
 }
 

@@ -24,10 +24,12 @@ impl LmStudioProvider {
         let base = host.unwrap_or("http://localhost:1234");
         let base_url = format!("{base}/v1");
         // No auth header for LM Studio (local server).
+        // 120 s was observed to cut off real generations on longer prompts;
+        // bump to 300 s so a slow but progressing model isn't killed.
         let http = Client::builder()
             .pool_max_idle_per_host(5)
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("failed to build LM Studio HTTP client");
         Self {

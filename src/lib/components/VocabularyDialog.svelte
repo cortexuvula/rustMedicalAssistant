@@ -9,6 +9,7 @@
     type VocabularyEntry,
     type CorrectionResult,
   } from '../api/vocabulary';
+  import { toasts } from '../stores/toasts';
 
   interface Props {
     open: boolean;
@@ -58,6 +59,7 @@
       entries = await listVocabularyEntries(cat);
     } catch (err) {
       console.error('Failed to load vocabulary entries:', err);
+      toasts.error(`Failed to load vocabulary entries: ${err}`);
     } finally {
       loading = false;
     }
@@ -143,6 +145,7 @@
       await loadEntries();
     } catch (err) {
       console.error('Failed to delete entry:', err);
+      toasts.error(`Failed to delete entry: ${err}`);
     }
   }
 
@@ -153,6 +156,7 @@
       await loadEntries();
     } catch (err) {
       console.error('Failed to delete all entries:', err);
+      toasts.error(`Failed to delete all entries: ${err}`);
     }
   }
 
@@ -170,6 +174,7 @@
       await loadEntries();
     } catch (err) {
       console.error('Failed to toggle entry:', err);
+      toasts.error(`Failed to toggle entry: ${err}`);
     }
   }
 

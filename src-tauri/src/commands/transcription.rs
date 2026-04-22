@@ -18,6 +18,30 @@ use crate::state::AppState;
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Detect the repeated-short-phrase pattern Whisper produces when fed silence
+/// (classic: "Thank you. Thank you. Thank you. ...").
+///
+/// Conservative by design: requires at least 3 sentence-like segments that are
+/// all identical (case-insensitive, whitespace-normalised) and short. Callers
+/// should gate this on a known-silent source so legitimate short transcripts
+/// aren't rejected.
+fn is_repeated_phrase_hallucination(text: &str) -> bool {
+    let segments: Vec<String> = text
+        .split(|c: char| matches!(c, '.' | '!' | '?' | '\n'))
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.len() < 3 {
+        return false;
+    }
+    let first = &segments[0];
+    // Long segments are almost never hallucinations — real speech is varied.
+    if first.chars().count() > 80 {
+        return false;
+    }
+    segments.iter().all(|s| s == first)
+}
+
 /// Load a WAV file from disk and convert it into `AudioData` (f32 PCM).
 fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
     let reader =
@@ -238,6 +262,35 @@ pub async fn transcribe_recording(
     // Build speaker-attributed text when diarization segments are available.
     let display_text = format_transcript_with_speakers(&transcript);
 
+    // Guard: silent source + repeated-phrase output is a Whisper hallucination.
+    // Rejecting here stops us from generating a bogus SOAP from nonsense like
+    // "Thank you. Thank you. Thank you. ..." that Whisper emits on silence.
+    if rms < 0.001 && is_repeated_phrase_hallucination(&transcript.text) {
+        let err_msg = format!(
+            "Transcription rejected: the audio was effectively silent (rms={rms:.6}) and the model returned a repeated-phrase hallucination. Check your microphone or audio routing."
+        );
+        tracing::warn!(
+            provider = %transcript.provider,
+            rms = %format!("{:.6}", rms),
+            text_preview = %transcript.text.chars().take(80).collect::<String>(),
+            "Rejecting likely Whisper hallucination from silent source"
+        );
+        let db = Arc::clone(&state.db);
+        let mut rec = recording;
+        rec.status = ProcessingStatus::Failed {
+            error: err_msg.clone(),
+            retry_count: 0,
+        };
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = db.conn() {
+                let _ = RecordingsRepo::update(&conn, &rec);
+            }
+        })
+        .await;
+        let _ = app.emit("transcription-progress", "failed");
+        return Err(err_msg);
+    }
+
     // Guard: if transcription produced no text, mark as Failed rather than
     // silently storing an empty transcript as "Completed".
     if display_text.trim().is_empty() {
@@ -383,5 +436,51 @@ pub async fn list_stt_providers(
     match guard.as_ref() {
         Some(provider) => Ok(vec![(provider.name().to_string(), true)]),
         None => Ok(vec![]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_repeated_phrase_hallucination;
+
+    #[test]
+    fn detects_thank_you_hallucination() {
+        assert!(is_repeated_phrase_hallucination(
+            "Thank you. Thank you. Thank you. Thank you."
+        ));
+    }
+
+    #[test]
+    fn detects_case_insensitive_repetition() {
+        assert!(is_repeated_phrase_hallucination(
+            "thank you. Thank You. THANK YOU."
+        ));
+    }
+
+    #[test]
+    fn rejects_varied_speech() {
+        assert!(!is_repeated_phrase_hallucination(
+            "The patient reports fatigue. Blood pressure is 140 over 90. Continue current medications."
+        ));
+    }
+
+    #[test]
+    fn rejects_short_transcript() {
+        assert!(!is_repeated_phrase_hallucination("Thank you."));
+        assert!(!is_repeated_phrase_hallucination("Thank you. Thank you."));
+    }
+
+    #[test]
+    fn rejects_empty_transcript() {
+        assert!(!is_repeated_phrase_hallucination(""));
+        assert!(!is_repeated_phrase_hallucination("   "));
+    }
+
+    #[test]
+    fn rejects_long_repeated_segments() {
+        // Long repeated segments are probably real speech, not hallucination.
+        let long = "a".repeat(100);
+        let text = format!("{long}. {long}. {long}.");
+        assert!(!is_repeated_phrase_hallucination(&text));
     }
 }

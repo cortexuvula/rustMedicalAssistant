@@ -11,6 +11,7 @@
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
   import { selectedRecording, selectRecording } from './lib/stores/recordings';
   import { pipeline } from './lib/stores/pipeline';
+  import { audio } from './lib/stores/audio';
   import { toasts } from './lib/stores/toasts';
   import ToastContainer from './lib/components/ToastContainer.svelte';
 
@@ -67,6 +68,10 @@
     });
 
     await pipeline.init();
+
+    // Recover orphan recording state (e.g. after a webview reload left the
+    // backend capture running while the frontend thinks it's idle).
+    await audio.rehydrate();
 
     pipelineCompleteUnlisten = await listen<{ recording_id: string; display_name: string }>(
       'pipeline-complete',

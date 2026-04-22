@@ -183,6 +183,41 @@ function createAudioStore() {
         waveformData: [...s.waveformData, ...data].slice(-256),
       }));
     },
+
+    /** Recover state from the backend on startup — if a recording is still
+     * running (e.g. after a webview reload), rehydrate the store so the Stop
+     * button is visible and the timer keeps ticking. */
+    async rehydrate() {
+      try {
+        const snap = await audioApi.getRecordingState();
+        if (!snap.active || !snap.recording_id) return;
+
+        if (waveformUnlisten) { waveformUnlisten(); waveformUnlisten = null; }
+        waveformUnlisten = await listen<number[]>('waveform-data', (event) => {
+          update((s) => ({
+            ...s,
+            waveformData: [...s.waveformData, ...event.payload].slice(-256),
+          }));
+        });
+
+        const initialElapsed = Math.floor(snap.elapsed_secs ?? 0);
+        update((s) => ({
+          ...s,
+          state: 'recording',
+          elapsed: initialElapsed,
+          waveformData: [],
+          lastRecordingId: snap.recording_id,
+          error: null,
+        }));
+        startTimer();
+        log.info('Recovered orphan recording after reload', {
+          recordingId: snap.recording_id,
+          elapsedSecs: initialElapsed,
+        });
+      } catch (e: any) {
+        log.warn('Could not query recording state on startup', { error: String(e) });
+      }
+    },
   };
 }
 

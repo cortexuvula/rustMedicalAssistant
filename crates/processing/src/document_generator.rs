@@ -6,7 +6,13 @@
 
 use std::collections::HashMap;
 
+use chrono::Local;
+
 use crate::prompt_resolver::resolve_prompt;
+
+fn format_now_for_prompt() -> String {
+    Local::now().format("Time %H:%M Date %d %b %Y").to_string()
+}
 
 // ---------------------------------------------------------------------------
 // Default templates
@@ -58,11 +64,13 @@ pub fn build_referral_prompt(
 
     let system = resolve_prompt(template, &placeholders);
 
+    let time_date = format_now_for_prompt();
     let user = format!(
         "Please write a referral letter to a {recipient_type} with {urgency} urgency based on \
-         the following SOAP note:\n\n{soap_note}",
+         the following SOAP note:\n\n{time_date}\n\n{soap_note}",
         recipient_type = recipient_type,
         urgency = urgency,
+        time_date = time_date,
         soap_note = soap_note,
     );
 
@@ -88,10 +96,12 @@ pub fn build_letter_prompt(
 
     let system = resolve_prompt(template, &placeholders);
 
+    let time_date = format_now_for_prompt();
     let user = format!(
         "Please write a {letter_type} letter for the patient based on the following SOAP \
-         note:\n\n{soap_note}",
+         note:\n\n{time_date}\n\n{soap_note}",
         letter_type = letter_type,
+        time_date = time_date,
         soap_note = soap_note,
     );
 
@@ -114,8 +124,10 @@ pub fn build_synopsis_prompt(
     // Synopsis template has no placeholders; pass empty map.
     let system = resolve_prompt(template, &HashMap::new());
 
+    let time_date = format_now_for_prompt();
     let user = format!(
-        "Please summarise the following SOAP note in under 200 words:\n\n{soap_note}",
+        "Please summarise the following SOAP note in under 200 words:\n\n{time_date}\n\n{soap_note}",
+        time_date = time_date,
         soap_note = soap_note,
     );
 
@@ -140,6 +152,7 @@ mod tests {
         assert!(!system.contains("{recipient_type}"));
         assert!(!system.contains("{urgency}"));
         assert!(user.contains("Chest pain"));
+        assert!(user.contains("Time") && user.contains("Date"));
     }
 
     #[test]
@@ -166,6 +179,7 @@ mod tests {
         assert!(system.contains("results"));
         assert!(!system.contains("{letter_type}"));
         assert!(user.contains("Anxiety"));
+        assert!(user.contains("Time") && user.contains("Date"));
     }
 
     #[test]
@@ -182,6 +196,7 @@ mod tests {
         let (system, user) = build_synopsis_prompt(soap, None);
         assert!(system.contains("200 words") || system.contains("200-word"));
         assert!(user.contains("Iron deficiency anaemia"));
+        assert!(user.contains("Time") && user.contains("Date"));
     }
 
     #[test]

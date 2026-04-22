@@ -20,6 +20,7 @@
   } from '../api/contextTemplates';
   import { contextTemplates } from '../stores/contextTemplates';
   import { getDefaultPrompt, type DocType } from '../api/prompts';
+  import { toasts } from '../stores/toasts';
 
   type Section = 'general' | 'prompts' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -101,6 +102,7 @@
     } catch (e) {
       console.error('Failed to list audio devices:', e);
       audioDevices = [];
+      toasts.error(`Failed to list audio devices: ${e}`);
     } finally {
       devicesLoading = false;
     }

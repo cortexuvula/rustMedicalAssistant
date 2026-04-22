@@ -36,3 +36,13 @@ export async function checkRecordingAudioLevels(
 ): Promise<RecordingAudioLevels> {
   return invoke('check_recording_audio_levels', { recordingId });
 }
+
+export interface RecordingStateSnapshot {
+  active: boolean;
+  recording_id: string | null;
+  elapsed_secs: number | null;
+}
+
+export async function getRecordingState(): Promise<RecordingStateSnapshot> {
+  return invoke('get_recording_state');
+}

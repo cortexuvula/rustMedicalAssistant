@@ -170,17 +170,20 @@ pub async fn stop_recording(
     };
 
     if wrapper.0.is_none() {
+        // Desync safety: clear the active flag too, otherwise a stale `true`
+        // leaves the user permanently locked out of starting a new recording.
+        {
+            let mut active = state.recording_active.lock().await;
+            *active = false;
+        }
         return Err("No active recording to stop".into());
     }
 
-    // Drop the wrapper on a dedicated thread so CaptureHandle::drop (which
+    // Drop the wrapper on a blocking worker so CaptureHandle::drop (which
     // joins the drain thread) doesn't block the async runtime.
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        drop(wrapper);
-        let _ = tx.send(());
-    });
-    rx.recv().map_err(|_| "Stop thread panicked".to_string())?;
+    tokio::task::spawn_blocking(move || drop(wrapper))
+        .await
+        .map_err(|e| format!("Stop task panicked: {e}"))?;
 
     // Set recording inactive.
     {
@@ -259,16 +262,25 @@ pub async fn cancel_recording(
     };
 
     if wrapper.0.is_none() {
+        // Clear the active flag even on the no-op path so a desynced `true`
+        // doesn't leave the user locked out.
+        {
+            let mut active = state.recording_active.lock().await;
+            *active = false;
+        }
+        // Also clear any stale current_recording slot.
+        {
+            let mut rec_lock = state.current_recording.lock().unwrap();
+            *rec_lock = None;
+        }
         return Err("No active recording to cancel".into());
     }
 
-    // Drop the capture handle on a dedicated thread.
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        drop(wrapper);
-        let _ = tx.send(());
-    });
-    rx.recv().map_err(|_| "Cancel thread panicked".to_string())?;
+    // Drop the capture handle on a blocking worker so its drop (which joins
+    // the drain thread) doesn't stall the async runtime.
+    tokio::task::spawn_blocking(move || drop(wrapper))
+        .await
+        .map_err(|e| format!("Cancel task panicked: {e}"))?;
 
     // Set recording inactive.
     {
@@ -324,7 +336,40 @@ pub fn resume_recording(state: tauri::State<'_, AppState>) -> Result<(), String>
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// 7. check_recording_audio_levels
+// 7. get_recording_state
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Snapshot of the current recording status, used by the frontend on boot to
+/// recover from a webview reload that left an orphan capture running.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordingStateSnapshot {
+    pub active: bool,
+    pub recording_id: Option<String>,
+    pub elapsed_secs: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn get_recording_state(
+    state: tauri::State<'_, AppState>,
+) -> Result<RecordingStateSnapshot, String> {
+    let active = *state.recording_active.lock().await;
+    let current = {
+        let guard = state.current_recording.lock().unwrap();
+        guard.as_ref().map(|c| (c.id.clone(), c.started_at))
+    };
+    let (recording_id, elapsed_secs) = match current {
+        Some((id, started_at)) => (Some(id), Some(started_at.elapsed().as_secs_f64())),
+        None => (None, None),
+    };
+    Ok(RecordingStateSnapshot {
+        active,
+        recording_id,
+        elapsed_secs,
+    })
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 8. check_recording_audio_levels
 // ──────────────────────────────────────────────────────────────────────────────
 
 /// Stats reported by `check_recording_audio_levels`.

@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { processRecording } from '../api/pipeline';
+import { processRecording, cancelPipeline } from '../api/pipeline';
 import { recordings } from './recordings';
 import { log } from '../api/logging';
 
@@ -112,6 +112,16 @@ function createPipelineStore() {
     /** Retry a failed pipeline. */
     retry(recordingId: string, context?: string, template?: string) {
       this.launch(recordingId, context, template);
+    },
+
+    /** Signal a running pipeline to cancel at its next stage boundary. */
+    async cancel(recordingId: string) {
+      try {
+        const ok = await cancelPipeline(recordingId);
+        log.info('Pipeline cancel requested', { recordingId, found: ok });
+      } catch (err) {
+        log.error('Pipeline cancel failed', { recordingId, error: String(err) });
+      }
     },
 
     destroy() {

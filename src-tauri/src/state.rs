@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -64,6 +66,10 @@ pub struct AppState {
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
     pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
+    /// Cancel flags for in-flight pipelines, keyed by recording id. The
+    /// pipeline inserts its own flag on entry and removes it on exit;
+    /// `cancel_pipeline` flips a flag to signal the poll points to bail out.
+    pub pipeline_cancels: Arc<std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
     // RAG subsystem
     pub embedding_generator: Arc<EmbeddingGenerator>,
     pub vector_store: Arc<VectorStore>,
@@ -186,6 +192,7 @@ impl AppState {
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
             current_recording: Arc::new(std::sync::Mutex::new(None)),
+            pipeline_cancels: Arc::new(std::sync::Mutex::new(HashMap::new())),
             embedding_generator,
             vector_store,
             bm25_search,

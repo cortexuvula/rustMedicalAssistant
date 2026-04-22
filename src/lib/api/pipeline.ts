@@ -11,3 +11,7 @@ export async function processRecording(
     template: template ?? null,
   });
 }
+
+export async function cancelPipeline(recordingId: string): Promise<boolean> {
+  return invoke('cancel_pipeline', { recordingId });
+}
