@@ -17,6 +17,7 @@
   import RsvpReader from './lib/components/RsvpReader.svelte';
   import RsvpSectionPicker from './lib/components/RsvpSectionPicker.svelte';
   import { rsvp } from './lib/stores/rsvp';
+  import { get } from 'svelte/store';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
@@ -73,16 +74,25 @@
 
     onGlobalKeydown = (e: KeyboardEvent) => {
       const cmdOrCtrl = e.metaKey || e.ctrlKey;
-      if (cmdOrCtrl && e.shiftKey && (e.key === 'r' || e.key === 'R')) {
-        e.preventDefault();
-        const rec = $selectedRecording;
-        if (!rec) return;
-        if (activeTab === 'record' && rec.soap_note) {
-          rsvp.openSoap(rec.soap_note);
-        } else if (activeTab === 'generate' || activeTab === 'editor') {
-          // Prefer the doc the user is most likely looking at.
-          if (rec.soap_note) rsvp.openSoap(rec.soap_note);
-        }
+      if (!(cmdOrCtrl && e.shiftKey && (e.key === 'r' || e.key === 'R'))) return;
+      e.preventDefault();
+      // Already open — don't stack another reader/picker on top.
+      const rsvpState = get(rsvp);
+      if (rsvpState.reader.open || rsvpState.picker.open) return;
+      const rec = $selectedRecording;
+      if (!rec) return;
+      // Respect the active tab so editor users speed-read the doc they see.
+      if (activeTab === 'soap' && rec.soap_note) {
+        rsvp.openSoap(rec.soap_note);
+      } else if (activeTab === 'referral' && rec.referral) {
+        rsvp.openGeneric(rec.referral, 'referral');
+      } else if (activeTab === 'letter' && rec.letter) {
+        rsvp.openGeneric(rec.letter, 'letter');
+      } else if (activeTab === 'transcript') {
+        // Spec: transcripts are excluded from RSVP.
+      } else if (rec.soap_note) {
+        // Fallback for 'record' / 'generate' / other: prefer SOAP.
+        rsvp.openSoap(rec.soap_note);
       }
     };
     window.addEventListener('keydown', onGlobalKeydown);

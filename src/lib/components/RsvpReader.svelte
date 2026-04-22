@@ -13,19 +13,22 @@ import {
 let tokens = $state<Token[]>([]);
 let index = $state(0);
 let playing = $state(false);
-let startedAt = $state(0);
-let elapsedBeforePause = $state(0);
 let timerHandle: ReturnType<typeof setTimeout> | null = null;
+let autoStartHandle: ReturnType<typeof setTimeout> | null = null;
 
 $effect(() => {
   if (!$rsvp.reader.open) return;
   tokens = tokenize($rsvp.reader.text);
   index = 0;
   playing = false;
-  startedAt = 0;
-  elapsedBeforePause = 0;
+  clearTimer();
+  clearAutoStart();
   if ($settings.rsvp_auto_start) {
-    setTimeout(() => { play(); }, 500);
+    autoStartHandle = setTimeout(() => {
+      autoStartHandle = null;
+      // Only kick off if the reader is still open and we haven't already started.
+      if ($rsvp.reader.open && !playing) play();
+    }, 500);
   }
 });
 
@@ -65,17 +68,25 @@ function clearTimer(): void {
   }
 }
 
+function clearAutoStart(): void {
+  if (autoStartHandle !== null) {
+    clearTimeout(autoStartHandle);
+    autoStartHandle = null;
+  }
+}
+
 function play(): void {
+  clearAutoStart();
+  if (playing) return;
   if (index >= tokens.length) index = 0;
   playing = true;
-  startedAt = Date.now();
   scheduleNext();
 }
 
 function pause(): void {
+  if (!playing) return;
   playing = false;
   clearTimer();
-  elapsedBeforePause += Date.now() - startedAt;
 }
 
 function togglePlay(): void {
@@ -97,7 +108,6 @@ function stepBack(): void {
 function goHome(): void {
   pause();
   index = 0;
-  elapsedBeforePause = 0;
 }
 
 function goEnd(): void {
@@ -118,11 +128,8 @@ function toggleTheme(): void {
   settings.updateField('rsvp_dark_theme', !$settings.rsvp_dark_theme);
 }
 
-function toggleContext(): void {
-  settings.updateField('rsvp_show_context', !$settings.rsvp_show_context);
-}
-
 function close(): void {
+  clearAutoStart();
   pause();
   rsvp.closeAll();
 }
@@ -158,6 +165,7 @@ onMount(() => {
 onDestroy(() => {
   window.removeEventListener('keydown', onKeydown);
   clearTimer();
+  clearAutoStart();
 });
 
 let stageFont = $derived(
@@ -239,7 +247,7 @@ function formatEta(secs: number): string {
             max="2000"
             step="25"
             value={$settings.rsvp_wpm}
-            oninput={(e) => settings.updateField('rsvp_wpm', Number((e.currentTarget as HTMLInputElement).value))}
+            onchange={(e) => settings.updateField('rsvp_wpm', Number((e.currentTarget as HTMLInputElement).value))}
           />
           <span class="num">{$settings.rsvp_wpm}</span>
         </label>
@@ -252,8 +260,9 @@ function formatEta(secs: number): string {
             max="96"
             step="2"
             value={$settings.rsvp_font_size}
-            oninput={(e) => settings.updateField('rsvp_font_size', Number((e.currentTarget as HTMLInputElement).value))}
+            onchange={(e) => settings.updateField('rsvp_font_size', Number((e.currentTarget as HTMLInputElement).value))}
           />
+          <span class="num">{$settings.rsvp_font_size}</span>
         </label>
 
         <div class="chunk-group" title="Chunk size (1/2/3)">
@@ -268,11 +277,6 @@ function formatEta(secs: number): string {
         <button onclick={toggleTheme} title="Theme (T)">
           {$settings.rsvp_dark_theme ? '☀' : '☾'}
         </button>
-        <button
-          class:active={$settings.rsvp_show_context}
-          onclick={toggleContext}
-          title="Show context sentence"
-        >Ctx</button>
       </div>
     </div>
   </div>
@@ -333,12 +337,6 @@ function formatEta(secs: number): string {
   .word { display: inline-flex; }
   .orp-word .pre, .orp-word .post { opacity: 0.95; }
   .orp-word .orp { color: #ef4444; }
-
-  .progress {
-    text-align: center;
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-  }
 
   .empty {
     color: var(--text-secondary);

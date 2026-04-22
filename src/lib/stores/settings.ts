@@ -26,6 +26,15 @@ const defaults: AppConfig = {
   custom_referral_prompt: null,
   custom_letter_prompt: null,
   custom_synopsis_prompt: null,
+  rsvp_wpm: 300,
+  rsvp_font_size: 48,
+  rsvp_chunk_size: 1,
+  rsvp_dark_theme: true,
+  rsvp_show_context: false,
+  rsvp_audio_cue: false,
+  rsvp_auto_start: true,
+  rsvp_remember_sections: false,
+  rsvp_remembered_sections: [],
 };
 
 function createSettingsStore() {

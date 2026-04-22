@@ -75,6 +75,16 @@ export interface AppConfig {
   custom_referral_prompt: string | null;
   custom_letter_prompt: string | null;
   custom_synopsis_prompt: string | null;
+  // RSVP speed-reader
+  rsvp_wpm: number;
+  rsvp_font_size: number;
+  rsvp_chunk_size: number;
+  rsvp_dark_theme: boolean;
+  rsvp_show_context: boolean;
+  rsvp_audio_cue: boolean;
+  rsvp_auto_start: boolean;
+  rsvp_remember_sections: boolean;
+  rsvp_remembered_sections: string[];
   [key: string]: any;
 }
 
