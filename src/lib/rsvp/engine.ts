@@ -107,3 +107,55 @@ export function preprocessSoap(text: string): string {
     .replace(/\n{3,}/gu, '\n\n')
     .trim();
 }
+
+export interface Section {
+  /** Display name in title case, e.g. "Subjective". */
+  name: string;
+  /** Index of the header token in the tokenize() output. */
+  startWordIndex: number;
+  /** Exclusive end index (== next section's start, or tokens.length). */
+  endWordIndex: number;
+  /** Words in the body (excluding the header token). */
+  wordCount: number;
+}
+
+const DISPLAY_NAMES: Record<string, string> = {
+  'subjective': 'Subjective',
+  'objective': 'Objective',
+  'assessment': 'Assessment',
+  'plan': 'Plan',
+  'differential diagnosis': 'Differential Diagnosis',
+  'follow up': 'Follow Up',
+  'follow-up': 'Follow Up',
+  'clinical synopsis': 'Clinical Synopsis',
+};
+
+/**
+ * Scan tokenized text for SOAP section headers. Returns sections in source
+ * order. Index bounds cover the header token + body words, exclusive end.
+ */
+export function detectSections(text: string): Section[] {
+  const tokens = tokenize(text);
+  const hits: Array<{ name: string; startWordIndex: number }> = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== 'header') continue;
+    const stripped = t.word
+      .replace(LEADING_EMPHASIS, '')
+      .replace(TRAILING_EMPHASIS, '');
+    const key = stripped.slice(0, -1).toLowerCase().trim();
+    const display = DISPLAY_NAMES[key];
+    if (display) hits.push({ name: display, startWordIndex: i });
+  }
+
+  return hits.map((hit, idx) => {
+    const end = idx + 1 < hits.length ? hits[idx + 1].startWordIndex : tokens.length;
+    return {
+      name: hit.name,
+      startWordIndex: hit.startWordIndex,
+      endWordIndex: end,
+      wordCount: end - hit.startWordIndex - 1, // exclude the header token
+    };
+  });
+}

@@ -3,6 +3,7 @@ import { orpIndex } from './engine';
 import { baseDelayMs, delayMs, type Token } from './engine';
 import { tokenize } from './engine';
 import { preprocessSoap } from './engine';
+import { detectSections, type Section } from './engine';
 
 describe('orpIndex', () => {
   it('returns 0 for words of length 1-3', () => {
@@ -144,5 +145,54 @@ describe('preprocessSoap', () => {
   it('leaves clean text untouched', () => {
     const clean = 'Patient reports chest pain.';
     expect(preprocessSoap(clean)).toBe(clean);
+  });
+});
+
+describe('detectSections', () => {
+  it('returns [] when no headers present', () => {
+    expect(detectSections('just some prose')).toEqual([]);
+  });
+
+  it('finds all seven SOAP headers case-insensitively', () => {
+    const text = [
+      'Subjective:',
+      'patient reports fatigue',
+      'OBJECTIVE:',
+      'BP 140/90',
+      'assessment:',
+      'hypertension',
+      'Plan:',
+      'start lisinopril',
+    ].join('\n');
+    const sections = detectSections(text);
+    expect(sections.map((s: Section) => s.name)).toEqual([
+      'Subjective',
+      'Objective',
+      'Assessment',
+      'Plan',
+    ]);
+  });
+
+  it('tolerates markdown bold around the header', () => {
+    const sections = detectSections('**Subjective:** patient reports fatigue');
+    expect(sections.length).toBe(1);
+    expect(sections[0].name).toBe('Subjective');
+  });
+
+  it('counts words per section', () => {
+    const text = 'Subjective: a b c\nObjective: d e';
+    const sections = detectSections(text);
+    expect(sections[0].wordCount).toBe(3); // a, b, c (header not counted)
+    expect(sections[1].wordCount).toBe(2); // d, e
+  });
+
+  it('reports start and end word indices', () => {
+    const text = 'Subjective: a b c\nObjective: d e';
+    const sections = detectSections(text);
+    // tokens: [Subjective:, a, b, c, Objective:, d, e] — indices 0..6
+    expect(sections[0].startWordIndex).toBe(0);
+    expect(sections[0].endWordIndex).toBe(4); // exclusive
+    expect(sections[1].startWordIndex).toBe(4);
+    expect(sections[1].endWordIndex).toBe(7);
   });
 });
