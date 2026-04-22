@@ -3,6 +3,8 @@
   import { selectedRecording } from '../stores/recordings';
   import { copyToClipboard } from '../utils/clipboard';
   import TextEditor from '../components/TextEditor.svelte';
+  import { rsvp } from '../stores/rsvp';
+  import type { DocKind } from '../stores/rsvp';
 
   let { tabId }: { tabId: 'transcript' | 'soap' | 'referral' | 'letter' } = $props();
 
@@ -37,6 +39,22 @@
       copyStatus = 'idle';
     }
   }
+
+  function handleSpeedRead() {
+    if (!content) return;
+    const map: Record<string, DocKind> = {
+      soap_note: 'soap',
+      referral: 'referral',
+      letter: 'letter',
+      chat: 'letter', // chat/synopsis-like documents read generically
+    };
+    const kind: DocKind = map[config.field] ?? 'letter';
+    if (kind === 'soap') {
+      rsvp.openSoap(content);
+    } else {
+      rsvp.openGeneric(content, kind);
+    }
+  }
 </script>
 
 <div class="editor-tab">
@@ -48,6 +66,9 @@
       {/if}
     </div>
     {#if content}
+      <button class="btn-copy" onclick={handleSpeedRead} title="Speed Read (Cmd/Ctrl+Shift+R)">
+        Speed Read
+      </button>
       <button
         class="btn-copy"
         class:copied={copyStatus === 'copied'}
