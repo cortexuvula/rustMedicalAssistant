@@ -14,6 +14,9 @@
   import { audio } from './lib/stores/audio';
   import { toasts } from './lib/stores/toasts';
   import ToastContainer from './lib/components/ToastContainer.svelte';
+  import RsvpReader from './lib/components/RsvpReader.svelte';
+  import RsvpSectionPicker from './lib/components/RsvpSectionPicker.svelte';
+  import { rsvp } from './lib/stores/rsvp';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
@@ -40,6 +43,7 @@
   let pipelineCompleteUnlisten: UnlistenFn | null = null;
   let pipelineFailedUnlisten: UnlistenFn | null = null;
   let settingsUnsubscribe: (() => void) | null = null;
+  let onGlobalKeydown: ((e: KeyboardEvent) => void) | null = null;
 
   async function navigateToSoap(tab: string, recordingId: string) {
     await selectRecording(recordingId);
@@ -66,6 +70,22 @@
     settingsUnsubscribe = settings.subscribe((cfg) => {
       theme.set(cfg.theme);
     });
+
+    onGlobalKeydown = (e: KeyboardEvent) => {
+      const cmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (cmdOrCtrl && e.shiftKey && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        const rec = $selectedRecording;
+        if (!rec) return;
+        if (activeTab === 'record' && rec.soap_note) {
+          rsvp.openSoap(rec.soap_note);
+        } else if (activeTab === 'generate' || activeTab === 'editor') {
+          // Prefer the doc the user is most likely looking at.
+          if (rec.soap_note) rsvp.openSoap(rec.soap_note);
+        }
+      }
+    };
+    window.addEventListener('keydown', onGlobalKeydown);
 
     await pipeline.init();
 
@@ -103,6 +123,7 @@
   });
 
   onDestroy(() => {
+    if (onGlobalKeydown) window.removeEventListener('keydown', onGlobalKeydown);
     progressUnlisten?.();
     settingsUnsubscribe?.();
     pipeline.destroy();
@@ -151,6 +172,9 @@
 </div>
 
 <SettingsDialog bind:open={settingsOpen} />
+
+<RsvpSectionPicker />
+<RsvpReader />
 
 <style>
   .app-shell {
