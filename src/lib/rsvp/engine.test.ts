@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { orpIndex } from './engine';
 import { baseDelayMs, delayMs, type Token } from './engine';
 import { tokenize } from './engine';
+import { preprocessSoap } from './engine';
 
 describe('orpIndex', () => {
   it('returns 0 for words of length 1-3', () => {
@@ -106,5 +107,42 @@ describe('tokenize', () => {
     const t = tokenize('one two three four.');
     expect(t.length).toBe(4);
     expect(t[3]).toEqual({ word: 'four.', kind: 'sentence' });
+  });
+});
+
+describe('preprocessSoap', () => {
+  it('strips ICD-10 codes in parens', () => {
+    const out = preprocessSoap('Hypertension (ICD-10: I10)');
+    expect(out).not.toMatch(/ICD-10/);
+    expect(out).not.toMatch(/I10/);
+    expect(out).toContain('Hypertension');
+  });
+
+  it('strips ICD-9 codes', () => {
+    const out = preprocessSoap('Diabetes (ICD-9: 250.00)');
+    expect(out).not.toMatch(/ICD-9/);
+    expect(out).not.toMatch(/250/);
+  });
+
+  it('strips "Not discussed" lines', () => {
+    const out = preprocessSoap(
+      'Chief complaint: fatigue\nFamily history: Not discussed\nSocial history: smoker'
+    );
+    expect(out).not.toMatch(/Not discussed/);
+    expect(out).toContain('fatigue');
+    expect(out).toContain('smoker');
+  });
+
+  it('strips leading bullets and dashes', () => {
+    const out = preprocessSoap('- headache\n• nausea\n* vomiting');
+    expect(out).not.toMatch(/^[-•*]\s/m);
+    expect(out).toContain('headache');
+    expect(out).toContain('nausea');
+    expect(out).toContain('vomiting');
+  });
+
+  it('leaves clean text untouched', () => {
+    const clean = 'Patient reports chest pain.';
+    expect(preprocessSoap(clean)).toBe(clean);
   });
 });

@@ -87,3 +87,23 @@ export function tokenize(text: string): Token[] {
     .filter((w) => w.length > 0)
     .map((word) => ({ word, kind: classify(word) }));
 }
+
+// Matches: "(ICD-10: X00.0)", "[ICD-9: 250.00]", " ICD-10: J45.909", etc.
+const ICD_RE = /\s*[\(\[]?\s*ICD-\d+:?\s*[A-Z]?[\d\.]+\s*[\)\]]?/giu;
+const NOT_DISCUSSED_LINE_RE = /^.*?:\s*Not discussed.*$/gimu;
+const LEADING_BULLET_RE = /^[-•*]\s+/gmu;
+
+/**
+ * Clean SOAP text for speed-reading:
+ *   - Strip ICD-9 / ICD-10 code fragments (they slow reading without adding meaning)
+ *   - Strip "<Field>: Not discussed" filler lines
+ *   - Strip leading `-`, `•`, `*` bullets
+ */
+export function preprocessSoap(text: string): string {
+  return text
+    .replace(ICD_RE, '')
+    .replace(NOT_DISCUSSED_LINE_RE, '')
+    .replace(LEADING_BULLET_RE, '')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trim();
+}
