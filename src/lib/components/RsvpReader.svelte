@@ -394,6 +394,12 @@ function formatEta(secs: number): string {
     font-size: 0.85rem;
     color: var(--text-secondary);
   }
+  /* Override the app's global `input { width: 100% }` so the sliders size
+     to their intended width instead of blowing out the toolbar. */
+  .controls input[type="range"] {
+    width: 140px;
+    flex: 0 0 auto;
+  }
   .controls .num { min-width: 3ch; text-align: right; }
   .chunk-group { display: inline-flex; gap: 2px; }
   .chunk-group button { border-radius: 0; }

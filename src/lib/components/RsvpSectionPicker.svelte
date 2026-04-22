@@ -143,6 +143,17 @@
   }
   .btn-close:hover { background: var(--bg-hover); }
 
+  /* Override the app's global `input { width: 100% }` so checkboxes don't
+     stretch and push the label text outside the dialog. */
+  .dialog input[type="checkbox"] {
+    width: 14px !important;
+    height: 14px;
+    min-width: 14px;
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0;
+  }
+
   .sections {
     list-style: none;
     margin: 0;
@@ -161,7 +172,7 @@
   }
   .sections label:hover { background: var(--bg-hover); }
   .sections .name { flex: 1; font-weight: 500; }
-  .sections .count { color: var(--text-secondary); font-size: 0.85rem; }
+  .sections .count { color: var(--text-secondary); font-size: 0.85rem; white-space: nowrap; }
 
   .remember {
     display: flex;
@@ -170,6 +181,7 @@
     font-size: 0.88rem;
     color: var(--text-secondary);
     cursor: pointer;
+    white-space: nowrap;
   }
 
   .actions {
