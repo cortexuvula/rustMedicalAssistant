@@ -10,6 +10,10 @@ export interface PipelineEntry {
   recordingId: string;
   stage: PipelineStage;
   error: string | null;
+  /** Wall-clock ms at pipeline launch — for the elapsed-time counter. */
+  startedAt: number;
+  /** Wall-clock ms when the stage reached `completed` or `failed`. Null while in-flight. */
+  finishedAt: number | null;
 }
 
 interface PipelineState {
@@ -36,16 +40,28 @@ function createPipelineStore() {
         'pipeline-progress',
         (event) => {
           const { recording_id, stage, error } = event.payload;
-          const entry: PipelineEntry = {
-            recordingId: recording_id,
-            stage: stage as PipelineStage,
-            error: error ?? null,
-          };
-          update((s) => ({
-            ...s,
-            current: s.current?.recordingId === recording_id ? entry : s.current,
-            active: { ...s.active, [recording_id]: entry },
-          }));
+          const isTerminal = stage === 'completed' || stage === 'failed';
+          update((s) => {
+            const prior = s.active[recording_id];
+            const entry: PipelineEntry = {
+              recordingId: recording_id,
+              stage: stage as PipelineStage,
+              error: error ?? null,
+              // Preserve the launch timestamp across stage transitions. If we
+              // missed the launch (e.g. HMR reloaded the store mid-pipeline),
+              // fall back to now — ETA will be slightly off but usable.
+              startedAt: prior?.startedAt ?? Date.now(),
+              // Freeze the clock when we hit a terminal state.
+              finishedAt: isTerminal
+                ? (prior?.finishedAt ?? Date.now())
+                : null,
+            };
+            return {
+              ...s,
+              current: s.current?.recordingId === recording_id ? entry : s.current,
+              active: { ...s.active, [recording_id]: entry },
+            };
+          });
 
           // Clean up completed/failed entries from active map after a delay
           if (stage === 'completed' || stage === 'failed') {
@@ -75,10 +91,13 @@ function createPipelineStore() {
 
     /** Launch the pipeline for a recording. Non-blocking — returns immediately. */
     launch(recordingId: string, context?: string, template?: string) {
+      const startedAt = Date.now();
       const entry: PipelineEntry = {
         recordingId,
         stage: 'transcribing',
         error: null,
+        startedAt,
+        finishedAt: null,
       };
       update((s) => ({
         ...s,
@@ -91,16 +110,21 @@ function createPipelineStore() {
       // Fire and forget — progress comes via events
       processRecording(recordingId, context, template).catch((err) => {
         log.error('Pipeline command failed', { recordingId, error: String(err) });
-        const errorEntry: PipelineEntry = {
-          recordingId,
-          stage: 'failed',
-          error: String(err),
-        };
-        update((s) => ({
-          ...s,
-          current: s.current?.recordingId === recordingId ? errorEntry : s.current,
-          active: { ...s.active, [recordingId]: errorEntry },
-        }));
+        update((s) => {
+          const prior = s.active[recordingId];
+          const errorEntry: PipelineEntry = {
+            recordingId,
+            stage: 'failed',
+            error: String(err),
+            startedAt: prior?.startedAt ?? startedAt,
+            finishedAt: Date.now(),
+          };
+          return {
+            ...s,
+            current: s.current?.recordingId === recordingId ? errorEntry : s.current,
+            active: { ...s.active, [recordingId]: errorEntry },
+          };
+        });
       });
     },
 

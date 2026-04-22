@@ -106,6 +106,24 @@
     }
   }
 
+  // Live clock for the pipeline-elapsed counter. Ticks once per second while
+  // a pipeline is in flight, then stops so we don't burn a timer forever.
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    const cur = $pipeline.current;
+    if (!cur || cur.finishedAt !== null) return;
+    nowMs = Date.now();
+    const id = setInterval(() => { nowMs = Date.now(); }, 1000);
+    return () => clearInterval(id);
+  });
+
+  function formatPipelineElapsed(ms: number): string {
+    const secs = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  }
+
   function handleStartRecording() {
     // Clear context for a fresh recording
     contextText = '';
@@ -356,6 +374,18 @@
         </div>
 
         <p class="pipeline-label">{stageLabel($pipeline.current.stage)}</p>
+
+        <p class="pipeline-elapsed">
+          {#if $pipeline.current.finishedAt !== null}
+            {#if $pipeline.current.stage === 'completed'}
+              Processing took {formatPipelineElapsed($pipeline.current.finishedAt - $pipeline.current.startedAt)}
+            {:else}
+              Stopped after {formatPipelineElapsed($pipeline.current.finishedAt - $pipeline.current.startedAt)}
+            {/if}
+          {:else}
+            Elapsed {formatPipelineElapsed(nowMs - $pipeline.current.startedAt)}
+          {/if}
+        </p>
 
         {#if ['transcribing', 'generating_soap'].includes($pipeline.current.stage)}
           <div class="post-actions">
@@ -723,6 +753,13 @@
     font-size: 15px;
     font-weight: 500;
     color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .pipeline-elapsed {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
     margin-bottom: 8px;
   }
 
