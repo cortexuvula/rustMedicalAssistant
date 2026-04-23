@@ -216,7 +216,12 @@ pub fn start_capture(
     let stop_flag_drain = Arc::clone(&stop_flag);
 
     // ── waveform channel ──────────────────────────────────────────────────────
-    let (waveform_tx, waveform_rx) = mpsc::channel::<Vec<f32>>();
+    // Bounded channel — if the UI-side consumer stalls (slow event system,
+    // backgrounded app, etc.), the drain thread drops the newest waveform
+    // frames via try_send rather than growing the queue without limit.
+    // 32 × 50 ms ≈ 1.6 s of buffered waveform — plenty for a responsive UI,
+    // cheap to drop if the consumer is gone.
+    let (waveform_tx, waveform_rx) = mpsc::sync_channel::<Vec<f32>>(32);
 
     // Chunk size to accumulate before computing & sending a waveform snapshot.
     // ~50 ms worth of samples.
@@ -246,17 +251,18 @@ pub fn start_capture(
                     acc.push(s);
                 }
 
-                // Emit waveform snapshot(s).
+                // Emit waveform snapshot(s). try_send drops on full so a
+                // stalled UI consumer can't grow the channel without bound.
                 while acc.len() >= waveform_chunk {
                     let chunk = acc.drain(..waveform_chunk).collect::<Vec<_>>();
                     let waveform = downsample_waveform(&chunk, 128);
-                    let _ = waveform_tx.send(waveform);
+                    let _ = waveform_tx.try_send(waveform);
                 }
             } else if stop_flag_drain.load(Ordering::Relaxed) {
                 // Flush remaining accumulator.
                 if !acc.is_empty() {
                     let waveform = downsample_waveform(&acc, 128);
-                    let _ = waveform_tx.send(waveform);
+                    let _ = waveform_tx.try_send(waveform);
                 }
                 // Final drain: capture any samples that arrived between the
                 // empty-check above and the stop_flag-check (race window).
