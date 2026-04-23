@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use super::agent::AgentSettings;
 
+/// How speech-to-text is performed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SttMode {
+    /// In-process whisper-rs on this machine.
+    #[default]
+    Local,
+    /// HTTP POST to an OpenAI-compatible Whisper server.
+    Remote,
+}
+
 /// AI providers supported at runtime. Used by AppConfig::migrate() to reject
 /// stale values left over from older versions of the app.
 pub const SUPPORTED_AI_PROVIDERS: &[&str] = &["lmstudio", "ollama"];
@@ -192,6 +203,22 @@ fn default_lmstudio_port() -> u16 {
     1234
 }
 
+fn default_stt_remote_port() -> u16 {
+    8080
+}
+
+fn default_stt_remote_model() -> String {
+    "whisper-1".into()
+}
+
+fn default_ollama_host() -> String {
+    "localhost".into()
+}
+
+fn default_ollama_port() -> u16 {
+    11434
+}
+
 fn default_vocabulary_enabled() -> bool {
     true
 }
@@ -271,6 +298,23 @@ pub struct AppConfig {
     pub lmstudio_host: String,
     #[serde(default = "default_lmstudio_port")]
     pub lmstudio_port: u16,
+
+    // STT mode selection
+    #[serde(default)]
+    pub stt_mode: SttMode,
+    // Remote Whisper server (when stt_mode == Remote)
+    #[serde(default)]
+    pub stt_remote_host: String,
+    #[serde(default = "default_stt_remote_port")]
+    pub stt_remote_port: u16,
+    #[serde(default = "default_stt_remote_model")]
+    pub stt_remote_model: String,
+
+    // Ollama server (local or remote on LAN)
+    #[serde(default = "default_ollama_host")]
+    pub ollama_host: String,
+    #[serde(default = "default_ollama_port")]
+    pub ollama_port: u16,
 
     // Temperature
     #[serde(default = "default_temperature")]
@@ -537,6 +581,35 @@ mod tests {
             config.migrate();
             assert_eq!(config.ai_provider, "lmstudio", "Expected '{legacy}' to migrate");
         }
+    }
+
+    #[test]
+    fn new_config_defaults_stt_mode_to_local() {
+        let config: AppConfig = serde_json::from_str("{}").expect("parse empty");
+        assert_eq!(config.stt_mode, SttMode::Local);
+        assert_eq!(config.stt_remote_host, "");
+        assert_eq!(config.stt_remote_port, 8080);
+        assert_eq!(config.stt_remote_model, "whisper-1");
+    }
+
+    #[test]
+    fn new_config_defaults_ollama_host_and_port() {
+        let config: AppConfig = serde_json::from_str("{}").expect("parse empty");
+        assert_eq!(config.ollama_host, "localhost");
+        assert_eq!(config.ollama_port, 11434);
+    }
+
+    #[test]
+    fn stt_mode_roundtrips_through_json() {
+        let json = r#"{"stt_mode":"remote"}"#;
+        let config: AppConfig = serde_json::from_str(json).expect("parse");
+        assert_eq!(config.stt_mode, SttMode::Remote);
+
+        let out = serde_json::to_string(&config).expect("serialize");
+        assert!(
+            out.contains(r#""stt_mode":"remote""#),
+            "expected remote, got: {out}"
+        );
     }
 
 }
