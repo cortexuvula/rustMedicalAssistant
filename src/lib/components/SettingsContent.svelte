@@ -2,7 +2,13 @@
   import { onMount } from 'svelte';
   import { settings } from '../stores/settings';
   import { theme } from '../stores/theme';
-  import { testLmStudioConnection } from '../api/settings';
+  import {
+    testLmStudioConnection,
+    testSttRemoteConnection,
+    testOllamaConnection,
+    setApiKey,
+    getApiKey,
+  } from '../api/settings';
   import { listModels, setActiveProvider, reinitProviders, type ModelInfo } from '../api/chat';
   import { listAudioDevices } from '../api/audio';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -39,6 +45,12 @@
   let downloadProgress = $state<Record<string, { downloaded: number; total: number }>>({});
   let lmstudioTestStatus = $state<'idle' | 'testing' | 'success' | 'error'>('idle');
   let lmstudioTestMessage = $state('');
+  let sttMode = $state<'local' | 'remote'>(($settings.stt_mode as 'local' | 'remote') ?? 'local');
+  let sttRemoteTestStatus = $state<'idle' | 'testing' | 'success' | 'error'>('idle');
+  let sttRemoteTestMessage = $state('');
+  let sttRemoteApiKey = $state('');
+  let ollamaTestStatus = $state<'idle' | 'testing' | 'success' | 'error'>('idle');
+  let ollamaTestMessage = $state('');
   let progressUnlisten: UnlistenFn | null = null;
   let vocabDialogOpen = $state(false);
   let vocabCount = $state<[number, number]>([0, 0]);
@@ -190,6 +202,11 @@
         console.error(`Settings init: ${labels[i]} failed:`, r.reason);
       }
     }
+
+    // Load the persisted STT remote API key so the password field reflects it.
+    getApiKey('stt_remote_api_key').then((key) => {
+      if (key) sttRemoteApiKey = key;
+    }).catch(() => { /* ignore — keychain miss is fine */ });
 
     // Listen for model download progress events
     progressUnlisten = await listen<{ model_id: string; downloaded_bytes: number; total_bytes: number }>(
@@ -795,6 +812,85 @@
             <span class="test-result test-error">✗ {lmstudioTestMessage}</span>
           {/if}
         </div>
+
+        <!-- Ollama Server -->
+        <div class="form-group-divider"></div>
+        <h4 class="subsection-title">Ollama Server</h4>
+        <p class="subsection-hint">
+          Configure the Ollama server address. Use <code>localhost</code> if Ollama runs on this machine, or enter a remote IP / Tailscale hostname for a network server.
+        </p>
+
+        <div class="form-group">
+          <label for="ollama-host" class="form-label">Host</label>
+          <input
+            id="ollama-host"
+            type="text"
+            value={$settings.ollama_host ?? ''}
+            placeholder="localhost"
+            onchange={async (e) => {
+              await settings.updateField('ollama_host', (e.target as HTMLInputElement).value);
+              ollamaTestStatus = 'idle';
+              ollamaTestMessage = '';
+              await reinitProviders();
+            }}
+            class="text-input"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="ollama-port" class="form-label">Port</label>
+          <input
+            id="ollama-port"
+            type="number"
+            value={$settings.ollama_port ?? 11434}
+            placeholder="11434"
+            min="1"
+            max="65535"
+            onchange={async (e) => {
+              const value = parseInt((e.target as HTMLInputElement).value, 10);
+              if (value >= 1 && value <= 65535) {
+                await settings.updateField('ollama_port', value);
+                ollamaTestStatus = 'idle';
+                ollamaTestMessage = '';
+                await reinitProviders();
+              }
+            }}
+            class="text-input port-input"
+          />
+        </div>
+
+        <div class="form-group">
+          <button
+            class="btn-test-connection"
+            disabled={ollamaTestStatus === 'testing'}
+            onclick={async () => {
+              ollamaTestStatus = 'testing';
+              ollamaTestMessage = '';
+              try {
+                const msg = await testOllamaConnection(
+                  $settings.ollama_host || 'localhost',
+                  $settings.ollama_port || 11434,
+                );
+                ollamaTestStatus = 'success';
+                ollamaTestMessage = msg;
+              } catch (err: any) {
+                ollamaTestStatus = 'error';
+                ollamaTestMessage = err?.toString() || 'Connection failed';
+              }
+            }}
+          >
+            {#if ollamaTestStatus === 'testing'}
+              Testing…
+            {:else}
+              Test Connection
+            {/if}
+          </button>
+          {#if ollamaTestStatus === 'success'}
+            <span class="test-result test-success">✓ {ollamaTestMessage}</span>
+          {:else if ollamaTestStatus === 'error'}
+            <span class="test-result test-error">✗ {ollamaTestMessage}</span>
+          {/if}
+        </div>
       </section>
 
     {:else if activeSection === 'audio'}
@@ -823,65 +919,203 @@
         </div>
 
         <div class="form-group">
-          <label for="whisper-model" class="form-label">Whisper Model</label>
-          <select
-            id="whisper-model"
-            value={$settings.whisper_model}
-            onchange={handleWhisperModelChange}
-            disabled={modelsRefreshing}
-          >
-            {#each whisperModels as model}
-              <option value={model.id}>
-                {model.id} ({formatBytes(model.size_bytes)}) {model.downloaded ? '' : '- not downloaded'}
-              </option>
-            {/each}
-          </select>
-          <span class="form-hint">Larger models are more accurate but use more memory and take longer.</span>
-        </div>
-
-        <div class="form-group">
-          <span class="form-label">Model Management</span>
-          <div class="model-list">
-            {#each whisperModels as model}
-              <div class="model-row">
-                <div class="model-info">
-                  <span class="model-name">{model.id}</span>
-                  <span class="model-desc">{model.description}</span>
-                  <span class="model-size">{formatBytes(model.size_bytes)}</span>
-                </div>
-                <div class="model-actions">
-                  {#if model.downloaded}
-                    <span class="badge-downloaded">Downloaded</span>
-                    <button
-                      class="btn-delete-model"
-                      onclick={() => handleDeleteModel(model.id)}
-                      disabled={model.id === $settings.whisper_model}
-                      title={model.id === $settings.whisper_model ? 'Cannot delete the active model' : 'Delete to free disk space'}
-                    >
-                      Delete
-                    </button>
-                  {:else if downloadingModel === model.id}
-                    <span class="download-progress">
-                      {#if downloadProgress[model.id]}
-                        {Math.round((downloadProgress[model.id].downloaded / (downloadProgress[model.id].total || 1)) * 100)}%
-                      {:else}
-                        Starting...
-                      {/if}
-                    </span>
-                  {:else}
-                    <button
-                      class="btn-download-model"
-                      onclick={() => handleDownloadModel(model.id)}
-                      disabled={downloadingModel !== null}
-                    >
-                      Download
-                    </button>
-                  {/if}
-                </div>
-              </div>
-            {/each}
+          <span class="form-label">STT Mode</span>
+          <div class="radio-row">
+            <label class="radio-label">
+              <input
+                type="radio"
+                bind:group={sttMode}
+                value="local"
+                onchange={async () => {
+                  sttMode = 'local';
+                  await settings.updateField('stt_mode', 'local');
+                  await reinitProviders();
+                }}
+              /> Local
+            </label>
+            <label class="radio-label">
+              <input
+                type="radio"
+                bind:group={sttMode}
+                value="remote"
+                onchange={async () => {
+                  sttMode = 'remote';
+                  await settings.updateField('stt_mode', 'remote');
+                  await reinitProviders();
+                }}
+              /> Remote
+            </label>
           </div>
         </div>
+
+        {#if sttMode === 'local'}
+          <div class="form-group">
+            <label for="whisper-model" class="form-label">Whisper Model</label>
+            <select
+              id="whisper-model"
+              value={$settings.whisper_model}
+              onchange={handleWhisperModelChange}
+              disabled={modelsRefreshing}
+            >
+              {#each whisperModels as model}
+                <option value={model.id}>
+                  {model.id} ({formatBytes(model.size_bytes)}) {model.downloaded ? '' : '- not downloaded'}
+                </option>
+              {/each}
+            </select>
+            <span class="form-hint">Larger models are more accurate but use more memory and take longer.</span>
+          </div>
+
+          <div class="form-group">
+            <span class="form-label">Model Management</span>
+            <div class="model-list">
+              {#each whisperModels as model}
+                <div class="model-row">
+                  <div class="model-info">
+                    <span class="model-name">{model.id}</span>
+                    <span class="model-desc">{model.description}</span>
+                    <span class="model-size">{formatBytes(model.size_bytes)}</span>
+                  </div>
+                  <div class="model-actions">
+                    {#if model.downloaded}
+                      <span class="badge-downloaded">Downloaded</span>
+                      <button
+                        class="btn-delete-model"
+                        onclick={() => handleDeleteModel(model.id)}
+                        disabled={model.id === $settings.whisper_model}
+                        title={model.id === $settings.whisper_model ? 'Cannot delete the active model' : 'Delete to free disk space'}
+                      >
+                        Delete
+                      </button>
+                    {:else if downloadingModel === model.id}
+                      <span class="download-progress">
+                        {#if downloadProgress[model.id]}
+                          {Math.round((downloadProgress[model.id].downloaded / (downloadProgress[model.id].total || 1)) * 100)}%
+                        {:else}
+                          Starting...
+                        {/if}
+                      </span>
+                    {:else}
+                      <button
+                        class="btn-download-model"
+                        onclick={() => handleDownloadModel(model.id)}
+                        disabled={downloadingModel !== null}
+                      >
+                        Download
+                      </button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <div class="form-group">
+            <label for="stt-remote-host" class="form-label">Host</label>
+            <input
+              id="stt-remote-host"
+              type="text"
+              placeholder="computer-a.tailnet.ts.net"
+              value={$settings.stt_remote_host ?? ''}
+              onchange={async (e) => {
+                await settings.updateField('stt_remote_host', (e.target as HTMLInputElement).value);
+                sttRemoteTestStatus = 'idle';
+                sttRemoteTestMessage = '';
+                await reinitProviders();
+              }}
+              class="text-input"
+            />
+          </div>
+          <div class="form-group">
+            <label for="stt-remote-port" class="form-label">Port</label>
+            <input
+              id="stt-remote-port"
+              type="number"
+              value={$settings.stt_remote_port ?? 8080}
+              min="1"
+              max="65535"
+              onchange={async (e) => {
+                const value = parseInt((e.target as HTMLInputElement).value, 10);
+                if (value >= 1 && value <= 65535) {
+                  await settings.updateField('stt_remote_port', value);
+                  sttRemoteTestStatus = 'idle';
+                  sttRemoteTestMessage = '';
+                  await reinitProviders();
+                }
+              }}
+              class="text-input port-input"
+            />
+          </div>
+          <div class="form-group">
+            <label for="stt-remote-model" class="form-label">Model</label>
+            <input
+              id="stt-remote-model"
+              type="text"
+              value={$settings.stt_remote_model ?? ''}
+              onchange={async (e) => {
+                await settings.updateField('stt_remote_model', (e.target as HTMLInputElement).value);
+                await reinitProviders();
+              }}
+              class="text-input"
+            />
+            <span class="form-hint">Model name as served by your Whisper server (e.g. <code>whisper-1</code>).</span>
+          </div>
+          <div class="form-group">
+            <label for="stt-remote-key" class="form-label">API key (optional)</label>
+            <input
+              id="stt-remote-key"
+              type="password"
+              bind:value={sttRemoteApiKey}
+              class="text-input"
+            />
+            <button
+              class="btn-test-connection"
+              type="button"
+              onclick={async () => {
+                try {
+                  await setApiKey('stt_remote_api_key', sttRemoteApiKey);
+                  sttRemoteTestMessage = 'Key saved.';
+                  sttRemoteTestStatus = 'success';
+                  await reinitProviders();
+                } catch (err) {
+                  sttRemoteTestStatus = 'error';
+                  sttRemoteTestMessage = `Failed to save key: ${err}`;
+                }
+              }}
+            >Save key</button>
+            <span class="form-hint">Leave blank and click Save to clear.</span>
+          </div>
+          <div class="form-group">
+            <button
+              class="btn-test-connection"
+              type="button"
+              disabled={sttRemoteTestStatus === 'testing'}
+              onclick={async () => {
+                sttRemoteTestStatus = 'testing';
+                sttRemoteTestMessage = '';
+                try {
+                  const msg = await testSttRemoteConnection(
+                    $settings.stt_remote_host || 'localhost',
+                    $settings.stt_remote_port || 8080,
+                    sttRemoteApiKey || null,
+                  );
+                  sttRemoteTestStatus = 'success';
+                  sttRemoteTestMessage = msg;
+                } catch (err: any) {
+                  sttRemoteTestStatus = 'error';
+                  sttRemoteTestMessage = err?.toString() || 'Connection failed';
+                }
+              }}
+            >{sttRemoteTestStatus === 'testing' ? 'Testing…' : 'Test Connection'}</button>
+            {#if sttRemoteTestStatus === 'success'}
+              <span class="test-result test-success">✓ {sttRemoteTestMessage}</span>
+            {:else if sttRemoteTestStatus === 'error'}
+              <span class="test-result test-error">✗ {sttRemoteTestMessage}</span>
+            {/if}
+          </div>
+        {/if}
+
+        <p class="form-hint">Diarization runs on this machine regardless of STT mode — pyannote models below are required for speaker labels.</p>
 
         <div class="form-group">
           <span class="form-label">Diarization Models (Speaker Identification)</span>
@@ -1055,6 +1289,28 @@
   .checkbox-label input[type='checkbox'] {
     width: auto;
     cursor: pointer;
+  }
+
+  .radio-row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .radio-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .radio-label input[type='radio'] {
+    width: auto;
+    cursor: pointer;
+    margin: 0;
   }
 
   .storage-path-row {
