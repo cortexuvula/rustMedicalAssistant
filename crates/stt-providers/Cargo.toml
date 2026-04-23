@@ -13,6 +13,7 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
 reqwest = { workspace = true }
+bytes = { workspace = true }
 tokio-stream = "0.1"
 # Local STT
 whisper-rs = "0.16"
@@ -26,3 +27,5 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+wiremock = "0.6"
+tempfile = "3"

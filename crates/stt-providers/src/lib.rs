@@ -4,6 +4,7 @@ pub mod whisper;
 pub mod diarization;
 pub mod merge;
 pub mod local_provider;
+pub mod remote_provider;
 
 pub use local_provider::LocalSttProvider;
 

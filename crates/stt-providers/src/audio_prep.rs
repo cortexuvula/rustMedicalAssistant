@@ -38,6 +38,69 @@ pub fn f32_to_i16(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
+/// Encode a 16 kHz mono PCM16 buffer as an in-memory WAV file.
+///
+/// Produces a RIFF/WAVE payload suitable for upload to any OpenAI-compatible
+/// Whisper server. No extra heap allocations after the initial `Vec::with_capacity`.
+pub fn write_pcm16_wav_bytes(samples: &[i16], sample_rate: u32) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut buf = Vec::with_capacity(44 + data_len as usize);
+
+    // RIFF header
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(36 + data_len).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+
+    // fmt chunk (PCM, mono, 16-bit)
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes()); // subchunk size
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&1u16.to_le_bytes()); // 1 channel
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    let byte_rate = sample_rate * 2; // sample_rate * channels * bits_per_sample/8
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+    buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+
+    // data chunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        buf.extend_from_slice(&s.to_le_bytes());
+    }
+
+    buf
+}
+
+#[cfg(test)]
+mod wav_encode_tests {
+    use super::*;
+
+    #[test]
+    fn encodes_header_and_data_length() {
+        let samples = [0i16, 1, -1, 32767, -32768];
+        let wav = write_pcm16_wav_bytes(&samples, 16000);
+        // RIFF header
+        assert_eq!(&wav[0..4], b"RIFF");
+        // file size (36 + data)
+        let file_size = u32::from_le_bytes(wav[4..8].try_into().unwrap());
+        assert_eq!(file_size, 36 + 10);
+        assert_eq!(&wav[8..12], b"WAVE");
+        // data chunk length
+        let data_len = u32::from_le_bytes(wav[40..44].try_into().unwrap());
+        assert_eq!(data_len, 10);
+        // total bytes
+        assert_eq!(wav.len(), 44 + 10);
+    }
+
+    #[test]
+    fn sample_rate_in_header_matches_input() {
+        let wav = write_pcm16_wav_bytes(&[0i16; 4], 22050);
+        let sr = u32::from_le_bytes(wav[24..28].try_into().unwrap());
+        assert_eq!(sr, 22050);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

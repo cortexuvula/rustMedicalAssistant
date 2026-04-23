@@ -1,0 +1,466 @@
+//! RemoteSttProvider — OpenAI-compatible Whisper server client.
+//!
+//! Sends a 16 kHz mono PCM WAV to `POST {base}/v1/audio/transcriptions` and
+//! parses `verbose_json` back into `TranscriptSegment[]`. Local pyannote
+//! diarization runs on the same audio buffer (paralleling `LocalSttProvider`)
+//! so speaker labels still work even when Whisper is remote.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use futures_core::Stream;
+use reqwest::{
+    Client,
+    multipart::{Form, Part},
+};
+use serde::Deserialize;
+use tracing::{info, warn};
+
+use medical_core::error::{AppError, AppResult};
+use medical_core::traits::SttProvider;
+use medical_core::types::{
+    AudioData, AudioStream, SttConfig, Transcript, TranscriptChunk, TranscriptSegment,
+};
+
+use crate::audio_prep;
+use crate::diarization::SpeakerDiarizer;
+use crate::merge;
+use crate::whisper::WhisperSegment;
+
+const TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(600);
+const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+pub struct RemoteSttProvider {
+    client: Client,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    segmentation_model_path: PathBuf,
+    embedding_model_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerboseJson {
+    #[serde(default)]
+    segments: Vec<VerboseSegment>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    duration: Option<f32>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerboseSegment {
+    start: f32,
+    end: f32,
+    text: String,
+}
+
+impl RemoteSttProvider {
+    pub fn new(
+        host: &str,
+        port: u16,
+        model: &str,
+        api_key: Option<String>,
+        segmentation_model_path: PathBuf,
+        embedding_model_path: PathBuf,
+    ) -> AppResult<Self> {
+        let host = if host.is_empty() { "localhost" } else { host };
+        let base_url = format!("http://{host}:{port}");
+
+        let client = Client::builder()
+            .pool_max_idle_per_host(4)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(TRANSCRIBE_TIMEOUT)
+            .build()
+            .map_err(|e| AppError::SttProvider(format!("Failed to build HTTP client: {e}")))?;
+
+        Ok(Self {
+            client,
+            base_url,
+            model: model.to_string(),
+            api_key,
+            segmentation_model_path,
+            embedding_model_path,
+        })
+    }
+
+    fn diarization_available(&self) -> bool {
+        self.segmentation_model_path.exists() && self.embedding_model_path.exists()
+    }
+
+    async fn post_audio(
+        &self,
+        wav_bytes: Vec<u8>,
+        language: Option<&str>,
+    ) -> AppResult<VerboseJson> {
+        let url = format!("{}/v1/audio/transcriptions", self.base_url);
+
+        let mut form = Form::new()
+            .part(
+                "file",
+                Part::bytes(wav_bytes)
+                    .file_name("audio.wav")
+                    .mime_str("audio/wav")
+                    .map_err(|e| AppError::SttProvider(format!("multipart error: {e}")))?,
+            )
+            .text("model", self.model.clone())
+            .text("response_format", "verbose_json");
+        if let Some(lang) = language {
+            if !lang.is_empty() {
+                form = form.text("language", lang.to_string());
+            }
+        }
+
+        let mut req = self.client.post(&url).multipart(form);
+        if let Some(key) = &self.api_key {
+            if !key.is_empty() {
+                req = req.header("Authorization", format!("Bearer {key}"));
+            }
+        }
+
+        let resp = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                AppError::SttProvider(format!(
+                    "Transcription timed out after {}s",
+                    TRANSCRIBE_TIMEOUT.as_secs()
+                ))
+            } else if e.is_connect() {
+                AppError::SttProvider(format!(
+                    "Cannot reach Whisper server at {}: {e}",
+                    self.base_url
+                ))
+            } else {
+                AppError::SttProvider(format!("Whisper request failed: {e}"))
+            }
+        })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(AppError::SttProvider(
+                "Whisper server rejected authentication — check API key".into(),
+            ));
+        }
+        if status.is_client_error() {
+            let body = resp.text().await.unwrap_or_default();
+            let prefix: String = body.chars().take(200).collect();
+            return Err(AppError::SttProvider(format!(
+                "Whisper server rejected request: {status} {prefix}"
+            )));
+        }
+        if status.is_server_error() {
+            return Err(AppError::SttProvider(format!(
+                "Whisper server internal error: {status}"
+            )));
+        }
+
+        resp.json::<VerboseJson>().await.map_err(|e| {
+            AppError::SttProvider(format!("Unexpected response from Whisper server: {e}"))
+        })
+    }
+}
+
+#[async_trait]
+impl SttProvider for RemoteSttProvider {
+    fn name(&self) -> &str {
+        "remote"
+    }
+
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    fn supports_diarization(&self) -> bool {
+        self.diarization_available()
+    }
+
+    async fn transcribe(&self, audio: AudioData, config: SttConfig) -> AppResult<Transcript> {
+        let duration = audio.duration_seconds();
+
+        // Stage 1: resample to 16 kHz mono f32, then convert to i16 for upload.
+        let audio_16k = audio_prep::to_16k_mono_f32(&audio);
+        let samples_i16 = audio_prep::f32_to_i16(&audio_16k);
+        let wav_bytes = audio_prep::write_pcm16_wav_bytes(&samples_i16, TARGET_SAMPLE_RATE);
+
+        // Stage 2: POST to the Whisper server.
+        let parsed = self.post_audio(wav_bytes, config.language.as_deref()).await?;
+
+        // Capture the server's full-text field (if any) before consuming `parsed.segments`.
+        let server_text = parsed.text.clone();
+        let server_language = parsed.language.clone();
+
+        // Convert the server's segments into `WhisperSegment`s so they can be
+        // handed to the existing `merge_segments_with_speakers` helper, which
+        // outputs `TranscriptSegment`s with a `speaker` field filled in when
+        // diarization turns are available.
+        let whisper_segments: Vec<WhisperSegment> = parsed
+            .segments
+            .into_iter()
+            .map(|s| WhisperSegment {
+                start: s.start as f64,
+                end: s.end as f64,
+                text: s.text,
+            })
+            .collect();
+
+        // Stage 3: local diarization if requested and models present.
+        let speaker_turns = if config.diarize && self.diarization_available() {
+            let seg_path = self.segmentation_model_path.clone();
+            let emb_path = self.embedding_model_path.clone();
+            let audio_for_diarize = samples_i16.clone();
+            match tokio::task::spawn_blocking(move || {
+                let diarizer = SpeakerDiarizer::new(seg_path, emb_path);
+                diarizer.diarize(&audio_for_diarize, TARGET_SAMPLE_RATE)
+            })
+            .await
+            {
+                Ok(Ok(turns)) => turns,
+                Ok(Err(e)) => {
+                    warn!(error = %e, "Diarization failed — proceeding without speaker labels");
+                    Vec::new()
+                }
+                Err(e) => {
+                    warn!(error = %e, "Diarization task panicked — proceeding without speaker labels");
+                    Vec::new()
+                }
+            }
+        } else {
+            if config.diarize && !self.diarization_available() {
+                warn!("Diarization requested but pyannote models not found — skipping");
+            }
+            Vec::new()
+        };
+
+        // Stage 4: merge speaker turns with whisper segments.
+        let merged: Vec<TranscriptSegment> =
+            merge::merge_segments_with_speakers(&whisper_segments, &speaker_turns);
+
+        let full_text = server_text.unwrap_or_else(|| {
+            merged
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+
+        info!(
+            segments = merged.len(),
+            text_len = full_text.len(),
+            "Remote transcription complete"
+        );
+
+        Ok(Transcript {
+            text: full_text,
+            segments: merged,
+            language: server_language.or(config.language),
+            duration_seconds: Some(duration),
+            provider: "remote".to_owned(),
+            metadata: serde_json::json!({
+                "server": self.base_url,
+                "model": self.model,
+            }),
+        })
+    }
+
+    async fn transcribe_stream(
+        &self,
+        _stream: AudioStream,
+        _config: SttConfig,
+    ) -> AppResult<Box<dyn Stream<Item = AppResult<TranscriptChunk>> + Send + Unpin>> {
+        Err(AppError::SttProvider(
+            "Remote provider does not support streaming transcription".to_owned(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use medical_core::types::{AudioData, SttConfig};
+    use wiremock::matchers::{header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn dummy_audio() -> AudioData {
+        // 1 second of silent 16 kHz mono f32.
+        AudioData {
+            samples: vec![0.0_f32; 16_000],
+            sample_rate: 16_000,
+            channels: 1,
+        }
+    }
+
+    fn verbose_body() -> serde_json::Value {
+        serde_json::json!({
+            "text": "Hello patient.",
+            "segments": [
+                { "start": 0.0, "end": 1.0, "text": "Hello patient." }
+            ],
+            "language": "en",
+            "duration": 1.0
+        })
+    }
+
+    fn provider_at(base: &str, api_key: Option<String>) -> RemoteSttProvider {
+        // Strip the http:// prefix to feed RemoteSttProvider::new which re-adds it.
+        let stripped = base.trim_start_matches("http://");
+        let (host, port) = stripped
+            .split_once(':')
+            .map(|(h, p)| (h.to_string(), p.parse::<u16>().unwrap()))
+            .unwrap();
+        RemoteSttProvider::new(
+            &host,
+            port,
+            "whisper-1",
+            api_key,
+            PathBuf::from("/nonexistent-seg.onnx"),
+            PathBuf::from("/nonexistent-emb.onnx"),
+        )
+        .expect("build provider")
+    }
+
+    #[tokio::test]
+    async fn happy_path_returns_segments_without_diarization() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(verbose_body()))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), None);
+        let transcript = provider
+            .transcribe(
+                dummy_audio(),
+                SttConfig { language: Some("en".into()), diarize: false, ..SttConfig::default() },
+            )
+            .await
+            .expect("transcribe");
+
+        assert_eq!(transcript.provider, "remote");
+        assert_eq!(transcript.segments.len(), 1);
+        assert_eq!(transcript.segments[0].text, "Hello patient.");
+        assert!(transcript.segments[0].speaker.is_none());
+    }
+
+    #[tokio::test]
+    async fn authorization_header_sent_when_api_key_present() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(verbose_body()))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), Some("sk-test".into()));
+        let res = provider
+            .transcribe(dummy_audio(), SttConfig::default())
+            .await;
+        assert!(res.is_ok(), "expected ok, got: {res:?}");
+    }
+
+    #[tokio::test]
+    async fn no_authorization_header_when_api_key_absent() {
+        let server = MockServer::start().await;
+        // Match requests that DO have Authorization — they should be zero.
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .and(header_exists("Authorization"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        // Requests WITHOUT Authorization get a 200.
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(verbose_body()))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), None);
+        let res = provider
+            .transcribe(dummy_audio(), SttConfig::default())
+            .await;
+        assert!(res.is_ok(), "should not send Authorization without key");
+    }
+
+    #[tokio::test]
+    async fn http_401_maps_to_auth_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), Some("bad".into()));
+        let err = provider
+            .transcribe(dummy_audio(), SttConfig::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("authentication"),
+            "expected auth error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_503_maps_to_server_internal_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), None);
+        let err = provider
+            .transcribe(dummy_audio(), SttConfig::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("internal error"),
+            "expected 5xx error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_json_maps_to_parse_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), None);
+        let err = provider
+            .transcribe(dummy_audio(), SttConfig::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Unexpected response"),
+            "expected parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn diarization_available_is_false_without_models() {
+        let p = RemoteSttProvider::new(
+            "localhost",
+            8080,
+            "whisper-1",
+            None,
+            PathBuf::from("/nowhere/seg.onnx"),
+            PathBuf::from("/nowhere/emb.onnx"),
+        )
+        .expect("build");
+        assert!(!p.diarization_available());
+    }
+}
