@@ -83,7 +83,13 @@ impl EmbeddingGenerator {
         // single-GPU server or hammering a user's CPU budget.
         const CONCURRENCY: usize = 8;
 
-        futures_util::stream::iter(texts.iter().map(|text| self.embed(text)))
+        // Build the per-text futures eagerly while we hold &self, then stream
+        // them through buffered(). This sidesteps the HRTB issue of trying to
+        // express "closure that reborrows self for each item" at a call site
+        // reached via tauri::generate_handler, whose expanded signature needs
+        // the embed future to be valid for any lifetime.
+        let futures: Vec<_> = texts.iter().map(|&t| self.embed(t)).collect();
+        futures_util::stream::iter(futures)
             .buffered(CONCURRENCY)
             .try_collect()
             .await
