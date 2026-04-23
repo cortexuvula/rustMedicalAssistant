@@ -918,8 +918,8 @@
           </select>
         </div>
 
-        <div class="form-group">
-          <span class="form-label">STT Mode</span>
+        <fieldset class="form-group radio-fieldset">
+          <legend class="form-label">STT Mode</legend>
           <div class="radio-row">
             <label class="radio-label">
               <input
@@ -927,8 +927,7 @@
                 bind:group={sttMode}
                 value="local"
                 onchange={async () => {
-                  sttMode = 'local';
-                  await settings.updateField('stt_mode', 'local');
+                  await settings.updateField('stt_mode', sttMode);
                   await reinitProviders();
                 }}
               /> Local
@@ -939,14 +938,13 @@
                 bind:group={sttMode}
                 value="remote"
                 onchange={async () => {
-                  sttMode = 'remote';
-                  await settings.updateField('stt_mode', 'remote');
+                  await settings.updateField('stt_mode', sttMode);
                   await reinitProviders();
                 }}
               /> Remote
             </label>
           </div>
-        </div>
+        </fieldset>
 
         {#if sttMode === 'local'}
           <div class="form-group">
@@ -1265,6 +1263,16 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .radio-fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0 0 0.75rem 0;
+  }
+  .radio-fieldset legend {
+    padding: 0;
+    margin-bottom: 0.25rem;
   }
 
   .form-label {

@@ -62,6 +62,12 @@ export interface AppConfig {
   tts_voice: string;
   lmstudio_host: string;
   lmstudio_port: number;
+  stt_mode: 'local' | 'remote';
+  stt_remote_host: string;
+  stt_remote_port: number;
+  stt_remote_model: string;
+  ollama_host: string;
+  ollama_port: number;
   temperature: number;
   sample_rate: number;
   autosave_enabled: boolean;
