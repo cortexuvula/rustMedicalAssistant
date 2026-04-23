@@ -110,12 +110,14 @@ pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     // Ollama — always available (local, no key needed).
     // Builder failures are logged and the provider skipped rather than
     // crashing startup, so a weird system HTTP config doesn't brick the app.
-    match OllamaProvider::new(None) {
+    let ollama_host = if config.ollama_host.is_empty() { "localhost" } else { &config.ollama_host };
+    let ollama_url = format!("http://{}:{}", ollama_host, config.ollama_port);
+    match OllamaProvider::new(Some(&ollama_url)) {
         Ok(p) => {
-            info!("Registering Ollama provider (local)");
+            info!(url = %ollama_url, "Registering Ollama provider");
             registry.register(Arc::new(p));
         }
-        Err(e) => tracing::error!(error = %e, "Failed to build Ollama provider; skipping"),
+        Err(e) => tracing::error!(error = %e, url = %ollama_url, "Failed to build Ollama provider; skipping"),
     }
 
     // LM Studio — always available (local or remote, no key needed)
@@ -205,8 +207,17 @@ impl AppState {
         }
 
         // --- RAG subsystem ---
-        info!("RAG: using Ollama embeddings (local)");
-        let embedding_generator = Arc::new(EmbeddingGenerator::new_ollama(None, None));
+        let embedding_host = if config_ref.ollama_host.is_empty() {
+            "localhost".to_string()
+        } else {
+            config_ref.ollama_host.clone()
+        };
+        let embedding_url = format!("http://{}:{}", embedding_host, config_ref.ollama_port);
+        info!(url = %embedding_url, model = %config_ref.embedding_model, "RAG: using Ollama embeddings");
+        let embedding_generator = Arc::new(EmbeddingGenerator::new_ollama(
+            Some(&embedding_url),
+            Some(&config_ref.embedding_model),
+        ));
 
         let vector_store = Arc::new(VectorStore::new(Arc::clone(&db)));
         let bm25_search = Arc::new(Bm25Search::new(Arc::clone(&db)));
@@ -247,5 +258,23 @@ impl AppState {
             graph_search,
             ingestion,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use medical_core::types::settings::AppConfig;
+
+    #[test]
+    fn init_ai_providers_uses_configured_ollama_host() {
+        let mut config = AppConfig::default();
+        config.ollama_host = "tailnet-node".into();
+        config.ollama_port = 11500;
+        let registry = init_ai_providers(&config);
+        assert!(
+            registry.list_available().contains(&"ollama".to_string()),
+            "ollama should still be registered with a custom host"
+        );
     }
 }
