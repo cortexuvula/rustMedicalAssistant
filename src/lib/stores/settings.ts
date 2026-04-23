@@ -83,11 +83,27 @@ function createSettingsStore() {
         console.warn('Settings not loaded yet, refusing to save');
         return;
       }
+      // Capture the previous state (for rollback) and the optimistic new state
+      // inside the synchronous update callback, then await the save outside.
+      // Awaiting is what makes `await settings.updateField(...)` followed by
+      // `reinitProviders()` read-after-write safe — without it, the save was
+      // a fire-and-forget background promise and the DB still held the old
+      // value when providers reloaded from it.
+      let captured: { prev: AppConfig; next: AppConfig } | null = null;
       update((current) => {
-        const updated: AppConfig = { ...current, [key]: value };
-        saveSettings(updated).catch((e) => console.error('Save failed:', e));
-        return updated;
+        const next: AppConfig = { ...current, [key]: value };
+        captured = { prev: current, next };
+        return next;
       });
+      if (!captured) return; // unreachable: update runs its callback synchronously
+      const { prev, next } = captured as { prev: AppConfig; next: AppConfig };
+      try {
+        await saveSettings(next);
+      } catch (err) {
+        console.error('Save failed:', err);
+        set(prev);
+        throw err;
+      }
     },
   };
 }
