@@ -20,6 +20,7 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = ["ndarray"
 ndarray = "0.17"
 knf-rs = "0.3.2"
 eyre = "0.6.12"
+rubato = "0.16"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }
@@ -28,3 +29,4 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = "0.6"
 tempfile = "3"
+hound = "3.5"
