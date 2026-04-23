@@ -85,6 +85,48 @@ Models are downloaded from HuggingFace/GitHub and stored locally.
 4. **Export** — Save as PDF, DOCX, or FHIR R4.
 5. **Chat** — Ask questions about the recording or clinical context.
 
+## Running STT / Ollama on a different machine (LAN / Tailscale)
+
+FerriScribe can offload Whisper and Ollama to a more powerful machine reached over your LAN or Tailscale. Diarization still runs on the client so speaker labels are preserved in both modes.
+
+### Whisper server (Computer A)
+
+Build `whisper.cpp`'s server binary once, then run it against the same model file FerriScribe downloads:
+
+```bash
+git clone https://github.com/ggerganov/whisper.cpp
+cd whisper.cpp
+make server
+./server -m /path/to/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8080
+```
+
+In FerriScribe (Computer B), **Settings → Audio / STT** → set **STT Mode** to **Remote**, **Host** to Computer A's hostname or Tailscale name, **Port** to `8080`, **Model** to `whisper-1`. Click **Test connection**.
+
+Any OpenAI-compatible Whisper server works — `faster-whisper-server`, LocalAI, etc. — just match the host/port/model fields accordingly.
+
+### Ollama (Computer A)
+
+Ollama must bind beyond `localhost` to accept remote connections:
+
+```bash
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+```
+
+In FerriScribe (Computer B), **Settings → AI Providers → Ollama Server** → set **Host** to Computer A's hostname or Tailscale name. Click **Test connection**.
+
+### Security
+
+On a Tailnet, peer identity is enforced by Tailscale ACLs. If you expose these services on an untrusted LAN, configure `whisper.cpp server --api-key` and enter the same value in FerriScribe's **API key** field; Ollama does not support API keys natively and should stay behind a trusted network boundary.
+
+### What stays local on Computer B
+
+- Audio capture and waveform display
+- Speaker diarization (pyannote + WeSpeaker)
+- SQLite database, vocabulary rules, RAG vector store
+- The SOAP / referral / letter / synopsis editors
+
+Only the Whisper inference and Ollama chat/embedding calls cross the wire.
+
 ## License
 
 MIT
