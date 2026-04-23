@@ -75,15 +75,16 @@ pub async fn download_model(
     .await
     .map_err(|e| e.to_string())?;
 
-    // After downloading, reinitialize the STT provider so it picks up new models
-    let whisper_model = {
-        let conn = state.db.conn().ok();
-        conn.and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
-            .map(|mut c| { c.migrate(); c })
-            .map(|cfg| cfg.whisper_model)
-            .unwrap_or_else(|| "large-v3-turbo".into())
+    // After downloading, reinitialize the STT provider so it picks up new models.
+    // Load the full AppConfig so local/remote mode + remote host/port/key all flow through.
+    let config = {
+        let conn = state.db.conn().map_err(|e| e.to_string())?;
+        let mut cfg = medical_db::settings::SettingsRepo::load_config(&conn)
+            .map_err(|e| e.to_string())?;
+        cfg.migrate();
+        cfg
     };
-    let stt = crate::state::init_stt_providers(&state.data_dir, &whisper_model);
+    let stt = crate::state::init_stt_providers_with_config(&state.data_dir, &config);
     {
         let mut guard = state.stt_providers.lock().await;
         *guard = stt;

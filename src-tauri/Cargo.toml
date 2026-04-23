@@ -46,3 +46,6 @@ medical-processing = { path = "../crates/processing" }
 medical-export = { path = "../crates/export" }
 medical-translation = { path = "../crates/translation" }
 reqwest = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

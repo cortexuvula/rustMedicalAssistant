@@ -28,7 +28,6 @@ use medical_rag::vector_store::VectorStore;
 
 use medical_security::key_storage::KeyStorage;
 
-use medical_stt_providers::LocalSttProvider;
 use medical_stt_providers::models as stt_models;
 
 use medical_core::traits::SttProvider;
@@ -135,24 +134,63 @@ pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     registry
 }
 
-/// Create the local STT provider with model paths from the app data directory.
-pub fn init_stt_providers(data_dir: &std::path::Path, whisper_model_id: &str) -> Option<Arc<dyn SttProvider + Send + Sync>> {
-    let whisper_filename = stt_models::whisper_model_filename(whisper_model_id)
-        .unwrap_or("ggml-large-v3-turbo.bin");
-
-    let whisper_path = stt_models::whisper_model_path(data_dir, whisper_filename);
+/// Create the STT provider based on the user's chosen mode.
+pub fn init_stt_providers_with_config(
+    data_dir: &std::path::Path,
+    config: &medical_core::types::settings::AppConfig,
+) -> Option<Arc<dyn SttProvider + Send + Sync>> {
     let seg_path = stt_models::pyannote_model_path(data_dir, "segmentation-3.0.onnx");
     let emb_path = stt_models::pyannote_model_path(data_dir, "wespeaker_en_voxceleb_CAM++.onnx");
 
-    info!(
-        whisper = %whisper_path.display(),
-        segmentation = %seg_path.display(),
-        embedding = %emb_path.display(),
-        "Initializing local STT provider"
-    );
+    match config.stt_mode {
+        medical_core::types::settings::SttMode::Local => {
+            let whisper_filename = stt_models::whisper_model_filename(&config.whisper_model)
+                .unwrap_or("ggml-large-v3-turbo.bin");
+            let whisper_path = stt_models::whisper_model_path(data_dir, whisper_filename);
+            info!(
+                whisper = %whisper_path.display(),
+                segmentation = %seg_path.display(),
+                embedding = %emb_path.display(),
+                "Initializing local STT provider"
+            );
+            Some(Arc::new(medical_stt_providers::local_provider::LocalSttProvider::new(
+                whisper_path,
+                seg_path,
+                emb_path,
+            )))
+        }
+        medical_core::types::settings::SttMode::Remote => {
+            // Load the remote API key from the keychain if present. A miss is
+            // non-fatal — the provider just omits the Authorization header.
+            // Mirror AppState::initialize's KeyStorage path: data_dir/config.
+            let api_key = medical_security::key_storage::KeyStorage::open(&data_dir.join("config"))
+                .ok()
+                .and_then(|ks| ks.get_key("stt_remote_api_key").ok().flatten());
 
-    let provider = LocalSttProvider::new(whisper_path, seg_path, emb_path);
-    Some(Arc::new(provider))
+            info!(
+                host = %config.stt_remote_host,
+                port = config.stt_remote_port,
+                model = %config.stt_remote_model,
+                has_api_key = api_key.is_some(),
+                "Initializing remote STT provider"
+            );
+
+            match medical_stt_providers::remote_provider::RemoteSttProvider::new(
+                &config.stt_remote_host,
+                config.stt_remote_port,
+                &config.stt_remote_model,
+                api_key,
+                seg_path,
+                emb_path,
+            ) {
+                Ok(p) => Some(Arc::new(p)),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to build remote STT provider");
+                    None
+                }
+            }
+        }
+    }
 }
 
 impl AppState {
@@ -194,10 +232,7 @@ impl AppState {
         // Initialize provider registries from saved API keys + config
         let mut ai_providers = init_ai_providers(&config_ref);
 
-        let whisper_model = config.as_ref()
-            .map(|c| c.whisper_model.as_str())
-            .unwrap_or("large-v3-turbo");
-        let stt_providers = init_stt_providers(&data_dir, whisper_model);
+        let stt_providers = init_stt_providers_with_config(&data_dir, &config_ref);
 
         // Set the active AI provider from saved settings
         if let Some(ref cfg) = config {
@@ -276,5 +311,33 @@ mod tests {
             registry.list_available().contains(&"ollama".to_string()),
             "ollama should still be registered with a custom host"
         );
+    }
+
+    #[test]
+    fn init_stt_providers_remote_mode_builds_remote_provider() {
+        use medical_core::types::settings::{AppConfig, SttMode};
+        let mut cfg = AppConfig::default();
+        cfg.stt_mode = SttMode::Remote;
+        cfg.stt_remote_host = "tailnet-node".into();
+        cfg.stt_remote_port = 8080;
+        cfg.stt_remote_model = "whisper-1".into();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let provider = init_stt_providers_with_config(tmp.path(), &cfg)
+            .expect("provider should be built");
+        assert_eq!(provider.name(), "remote");
+    }
+
+    #[test]
+    fn init_stt_providers_local_mode_builds_local_provider() {
+        use medical_core::types::settings::{AppConfig, SttMode};
+        let mut cfg = AppConfig::default();
+        cfg.stt_mode = SttMode::Local;
+        cfg.whisper_model = "large-v3-turbo".into();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let provider = init_stt_providers_with_config(tmp.path(), &cfg)
+            .expect("provider should be built");
+        assert_eq!(provider.name(), "local");
     }
 }

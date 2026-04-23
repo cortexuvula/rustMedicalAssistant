@@ -33,8 +33,8 @@ pub async fn reinit_providers(
         *guard = ai_registry;
     }
 
-    // Rebuild local STT provider with current whisper model setting
-    let stt = state::init_stt_providers(&state.data_dir, &config.whisper_model);
+    // Rebuild STT provider based on current config (mode + whisper model + remote host/port/key).
+    let stt = state::init_stt_providers_with_config(&state.data_dir, &config);
     {
         let mut guard = state.stt_providers.lock().await;
         *guard = stt;
