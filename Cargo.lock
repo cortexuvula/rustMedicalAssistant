@@ -3445,6 +3445,7 @@ dependencies = [
 name = "medical-rag"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "medical-core",
  "medical-db",
  "reqwest 0.12.28",

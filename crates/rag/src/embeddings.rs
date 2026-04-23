@@ -72,38 +72,21 @@ impl EmbeddingGenerator {
 
     /// Generate embeddings for a batch of texts.
     ///
-    /// Ollama requires one call per text.
+    /// Ollama exposes one-prompt-per-request, so this fans out the inputs
+    /// with bounded concurrency instead of serializing every call. The
+    /// resulting vector is in the same order as `texts`.
     pub async fn embed_batch(&self, texts: &[&str]) -> AppResult<Vec<Vec<f32>>> {
-        let url = format!("{}/api/embeddings", self.host);
-        let mut results = Vec::with_capacity(texts.len());
-        for text in texts {
-            let body = OllamaRequest {
-                model: &self.model,
-                prompt: text,
-            };
-            let resp = self
-                .client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| AppError::AiProvider(format!("Ollama request failed: {e}")))?;
+        use futures_util::stream::{StreamExt, TryStreamExt};
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body_text = resp.text().await.unwrap_or_default();
-                return Err(AppError::AiProvider(format!(
-                    "Ollama API error {status}: {body_text}"
-                )));
-            }
+        // 8 concurrent requests is a safe default for local Ollama — enough
+        // to hide request latency on 100-chunk PDFs without saturating a
+        // single-GPU server or hammering a user's CPU budget.
+        const CONCURRENCY: usize = 8;
 
-            let parsed: OllamaResponse = resp
-                .json()
-                .await
-                .map_err(|e| AppError::AiProvider(format!("Ollama response parse error: {e}")))?;
-            results.push(parsed.embedding);
-        }
-        Ok(results)
+        futures_util::stream::iter(texts.iter().map(|text| self.embed(text)))
+            .buffered(CONCURRENCY)
+            .try_collect()
+            .await
     }
 }
 
