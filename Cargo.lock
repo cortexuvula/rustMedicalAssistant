@@ -3485,7 +3485,6 @@ name = "medical-stt-providers"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "bytes",
  "eyre",
  "futures-core",
  "knf-rs",

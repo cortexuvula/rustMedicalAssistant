@@ -57,7 +57,8 @@ struct VerboseJson {
 struct VerboseSegment {
     start: f32,
     end: f32,
-    text: String,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 impl RemoteSttProvider {
@@ -110,17 +111,13 @@ impl RemoteSttProvider {
             )
             .text("model", self.model.clone())
             .text("response_format", "verbose_json");
-        if let Some(lang) = language {
-            if !lang.is_empty() {
-                form = form.text("language", lang.to_string());
-            }
+        if let Some(lang) = language.filter(|l| !l.is_empty()) {
+            form = form.text("language", lang.to_string());
         }
 
         let mut req = self.client.post(&url).multipart(form);
-        if let Some(key) = &self.api_key {
-            if !key.is_empty() {
-                req = req.header("Authorization", format!("Bearer {key}"));
-            }
+        if let Some(key) = self.api_key.as_deref().filter(|k| !k.is_empty()) {
+            req = req.header("Authorization", format!("Bearer {key}"));
         }
 
         let resp = req.send().await.map_err(|e| {
@@ -200,10 +197,16 @@ impl SttProvider for RemoteSttProvider {
         let whisper_segments: Vec<WhisperSegment> = parsed
             .segments
             .into_iter()
-            .map(|s| WhisperSegment {
-                start: s.start as f64,
-                end: s.end as f64,
-                text: s.text,
+            .filter_map(|s| {
+                let text = s.text?;
+                if text.trim().is_empty() {
+                    return None;
+                }
+                Some(WhisperSegment {
+                    start: s.start as f64,
+                    end: s.end as f64,
+                    text,
+                })
             })
             .collect();
 
@@ -462,5 +465,30 @@ mod tests {
         )
         .expect("build");
         assert!(!p.diarization_available());
+    }
+
+    #[tokio::test]
+    async fn segments_without_text_are_skipped() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "text": "Hello.",
+                "segments": [
+                    { "start": 0.0, "end": 0.5 },
+                    { "start": 0.5, "end": 1.0, "text": "" },
+                    { "start": 1.0, "end": 2.0, "text": "Hello." }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), None);
+        let transcript = provider
+            .transcribe(dummy_audio(), SttConfig::default())
+            .await
+            .expect("transcribe");
+        assert_eq!(transcript.segments.len(), 1, "empty/missing text segments must be filtered");
+        assert_eq!(transcript.segments[0].text, "Hello.");
     }
 }
