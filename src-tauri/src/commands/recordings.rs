@@ -47,21 +47,31 @@ pub fn delete_recording(
     id: String,
 ) -> Result<(), String> {
     let uuid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
+    let mut conn = state.db.conn().map_err(|e| e.to_string())?;
 
     // Get the recording first so we can clean up the WAV file
     let recording = RecordingsRepo::get_by_id(&conn, &uuid).ok();
 
-    // Delete RAG chunks indexed from this recording
-    let _ = VectorsRepo::delete_by_document(&conn, &id);
+    // Delete the vectors and the recording row atomically: if either fails,
+    // rolling back leaves the user in a consistent "still present" state they
+    // can retry, rather than orphaned vectors pointing at a deleted recording.
+    let tx = conn.transaction().map_err(|e| format!("begin tx: {e}"))?;
+    if let Err(e) = VectorsRepo::delete_by_document(&tx, &id) {
+        // Not fatal on its own (recording may have no RAG chunks), but log
+        // rather than silently discard so we don't hide a real DB error.
+        tracing::warn!(recording_id = %id, error = %e, "vector delete failed, continuing");
+    }
+    RecordingsRepo::delete(&tx, &uuid).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| format!("commit tx: {e}"))?;
 
-    // Delete the DB row (transcript, SOAP, referral, letter are all columns)
-    RecordingsRepo::delete(&conn, &uuid).map_err(|e| e.to_string())?;
-
-    // Delete the WAV file from disk
+    // Delete the WAV file from disk only after the DB commit succeeds —
+    // removing the file first and failing the DB delete would leave a row
+    // pointing at nothing.
     if let Some(rec) = recording {
         if rec.audio_path.exists() {
-            let _ = std::fs::remove_file(&rec.audio_path);
+            if let Err(e) = std::fs::remove_file(&rec.audio_path) {
+                tracing::warn!(path = %rec.audio_path.display(), error = %e, "WAV delete failed");
+            }
         }
     }
 
