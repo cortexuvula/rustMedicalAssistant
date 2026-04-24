@@ -107,6 +107,7 @@ async fn mark_recording_failed(
     err_msg: String,
 ) -> String {
     mark_recording_failed_db_only(db, recording, err_msg.clone()).await;
+    // Emit failure is non-fatal: at worst the frontend spinner stays visible until the next state change.
     let _ = app.emit("transcription-progress", "failed");
     err_msg
 }
@@ -165,9 +166,18 @@ pub async fn transcribe_recording(
 
     // Load and decode the WAV file on a blocking thread (CPU-intensive for large files).
     let wav_path_clone = wav_path.clone();
-    let audio = tokio::task::spawn_blocking(move || load_wav_to_audio_data(&wav_path_clone))
+    let audio = match tokio::task::spawn_blocking(move || load_wav_to_audio_data(&wav_path_clone))
         .await
-        .map_err(|e| format!("Task join error: {e}"))??;
+    {
+        Ok(Ok(audio)) => audio,
+        Ok(Err(e)) => {
+            return Err(mark_recording_failed(&app, &state.db, recording, e).await);
+        }
+        Err(e) => {
+            let err_msg = format!("Task join error: {e}");
+            return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+        }
+    };
 
     // Compute audio signal stats to detect silent/corrupt recordings.
     let (peak, rms) = if audio.samples.is_empty() {
@@ -277,7 +287,7 @@ pub async fn transcribe_recording(
 
     // Apply vocabulary corrections if enabled
     let db_vocab = Arc::clone(&state.db);
-    let display_text = tokio::task::spawn_blocking(move || {
+    let display_text = match tokio::task::spawn_blocking(move || {
         let conn = db_vocab.conn().map_err(|e| e.to_string())?;
         let config = SettingsRepo::load_config(&conn)
             .ok()
@@ -299,7 +309,16 @@ pub async fn transcribe_recording(
         Ok(display_text)
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => {
+            return Err(mark_recording_failed(&app, &state.db, recording, e).await);
+        }
+        Err(e) => {
+            let err_msg = format!("Task join error: {e}");
+            return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+        }
+    };
 
     // Persist the transcript and mark as Completed — on a blocking thread.
     let db = Arc::clone(&state.db);
