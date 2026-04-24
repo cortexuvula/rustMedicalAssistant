@@ -74,6 +74,43 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
     })
 }
 
+/// Persist `Failed` status for a recording. Ignores DB errors — the caller is
+/// already returning the original error, so a DB write failure here would only
+/// obscure it. This is the testable half of `mark_recording_failed`.
+pub(super) async fn mark_recording_failed_db_only(
+    db: &Arc<medical_db::Database>,
+    mut recording: medical_core::types::recording::Recording,
+    err_msg: String,
+) {
+    recording.status = ProcessingStatus::Failed {
+        error: err_msg,
+        retry_count: 0,
+    };
+    let db = Arc::clone(db);
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Ok(conn) = db.conn() {
+            let _ = RecordingsRepo::update(&conn, &recording);
+        }
+    })
+    .await;
+}
+
+/// Mark a recording as `Failed`, persist the status, and emit
+/// `transcription-progress: "failed"` so the frontend spinner clears.
+///
+/// Returns the error message unchanged so callers can
+/// `return Err(mark_recording_failed(...).await);`.
+async fn mark_recording_failed(
+    app: &tauri::AppHandle,
+    db: &Arc<medical_db::Database>,
+    recording: medical_core::types::recording::Recording,
+    err_msg: String,
+) -> String {
+    mark_recording_failed_db_only(db, recording, err_msg.clone()).await;
+    let _ = app.emit("transcription-progress", "failed");
+    err_msg
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // 1. transcribe_recording
 // ──────────────────────────────────────────────────────────────────────────────
@@ -123,20 +160,7 @@ pub async fn transcribe_recording(
 
     if !wav_path.exists() {
         let err_msg = format!("WAV file not found: {}", wav_path.display());
-        // Mark failed on a blocking thread
-        let db = Arc::clone(&state.db);
-        let mut rec = recording;
-        rec.status = ProcessingStatus::Failed {
-            error: err_msg.clone(),
-            retry_count: 0,
-        };
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = db.conn() {
-                let _ = RecordingsRepo::update(&conn, &rec);
-            }
-        })
-        .await;
-        return Err(err_msg);
+        return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
     }
 
     // Load and decode the WAV file on a blocking thread (CPU-intensive for large files).
@@ -179,20 +203,7 @@ pub async fn transcribe_recording(
     if audio.samples.is_empty() {
         let err_msg = format!("WAV file contains no audio samples: {}", wav_path.display());
         tracing::error!("{err_msg}");
-        // Mark as Failed in DB before returning.
-        let db = Arc::clone(&state.db);
-        let mut rec = recording.clone();
-        rec.status = ProcessingStatus::Failed {
-            error: err_msg.clone(),
-            retry_count: 0,
-        };
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = db.conn() {
-                let _ = RecordingsRepo::update(&conn, &rec);
-            }
-        })
-        .await;
-        return Err(err_msg);
+        return Err(mark_recording_failed(&app, &state.db, recording.clone(), err_msg).await);
     }
 
     // Build STT config from caller parameters.
@@ -213,20 +224,7 @@ pub async fn transcribe_recording(
             None => {
                 let err_msg = "No STT provider configured. Download a Whisper model in Settings → Audio / STT.".to_string();
                 tracing::error!("{err_msg}");
-                // Mark recording as Failed so it doesn't stay stuck at Processing.
-                let db = Arc::clone(&state.db);
-                let mut rec = recording;
-                rec.status = ProcessingStatus::Failed {
-                    error: err_msg.clone(),
-                    retry_count: 0,
-                };
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) = db.conn() {
-                        let _ = RecordingsRepo::update(&conn, &rec);
-                    }
-                })
-                .await;
-                return Err(err_msg);
+                return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
             }
         }
     };
@@ -235,20 +233,7 @@ pub async fn transcribe_recording(
         Err(e) => {
             let err_msg = format!("Transcription failed: {e}");
             tracing::error!(error = %e, "STT transcription failed");
-            // Mark recording as Failed so it doesn't stay stuck at Processing.
-            let db = Arc::clone(&state.db);
-            let mut rec = recording;
-            rec.status = ProcessingStatus::Failed {
-                error: err_msg.clone(),
-                retry_count: 0,
-            };
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Ok(conn) = db.conn() {
-                    let _ = RecordingsRepo::update(&conn, &rec);
-                }
-            })
-            .await;
-            return Err(err_msg);
+            return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
         }
     };
 
@@ -275,20 +260,7 @@ pub async fn transcribe_recording(
             text_preview = %transcript.text.chars().take(80).collect::<String>(),
             "Rejecting likely Whisper hallucination from silent source"
         );
-        let db = Arc::clone(&state.db);
-        let mut rec = recording;
-        rec.status = ProcessingStatus::Failed {
-            error: err_msg.clone(),
-            retry_count: 0,
-        };
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = db.conn() {
-                let _ = RecordingsRepo::update(&conn, &rec);
-            }
-        })
-        .await;
-        let _ = app.emit("transcription-progress", "failed");
-        return Err(err_msg);
+        return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
     }
 
     // Guard: if transcription produced no text, mark as Failed rather than
@@ -300,20 +272,7 @@ pub async fn transcribe_recording(
             segments = transcript.segments.len(),
             "{err_msg}"
         );
-        let db = Arc::clone(&state.db);
-        let mut rec = recording;
-        rec.status = ProcessingStatus::Failed {
-            error: err_msg.clone(),
-            retry_count: 0,
-        };
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = db.conn() {
-                let _ = RecordingsRepo::update(&conn, &rec);
-            }
-        })
-        .await;
-        let _ = app.emit("transcription-progress", "failed");
-        return Err(err_msg);
+        return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
     }
 
     // Apply vocabulary corrections if enabled
@@ -442,6 +401,44 @@ pub async fn list_stt_providers(
 #[cfg(test)]
 mod tests {
     use super::is_repeated_phrase_hallucination;
+
+    use chrono::Utc;
+    use medical_core::types::recording::{ProcessingStatus, Recording};
+    use medical_db::recordings::RecordingsRepo;
+    use medical_db::Database;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn mk_recording() -> Recording {
+        let mut rec = Recording::new("t.wav", PathBuf::from("/tmp/nope.wav"));
+        rec.status = ProcessingStatus::Processing {
+            started_at: Utc::now(),
+        };
+        rec
+    }
+
+    #[tokio::test]
+    async fn mark_recording_failed_updates_status_to_failed() {
+        let db = Arc::new(Database::open_in_memory().expect("open in-memory db"));
+        let rec = mk_recording();
+        let id = rec.id;
+        {
+            let conn = db.conn().expect("conn");
+            RecordingsRepo::insert(&conn, &rec).expect("insert");
+        }
+
+        super::mark_recording_failed_db_only(&db, rec, "boom".to_string()).await;
+
+        let conn = db.conn().expect("conn");
+        let loaded = RecordingsRepo::get_by_id(&conn, &id).expect("get");
+        match loaded.status {
+            ProcessingStatus::Failed { error, retry_count } => {
+                assert_eq!(error, "boom");
+                assert_eq!(retry_count, 0);
+            }
+            other => panic!("expected Failed, got {:?}", other),
+        }
+    }
 
     #[test]
     fn detects_thank_you_hallucination() {
