@@ -19,6 +19,25 @@ use medical_core::types::settings::SoapTemplate;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
+// Input size bounds
+// ---------------------------------------------------------------------------
+
+/// Maximum size of a user-supplied `context` string (roughly ~12k tokens).
+/// Prevents pasting multi-megabyte documents that would blow past provider
+/// token limits or cause excessive memory usage.
+const MAX_CONTEXT_CHARS: usize = 50_000;
+
+/// Maximum size of a recording transcript we will send to a provider.
+/// A 2-hour transcript at ~150 wpm is ~180k chars; 500k gives comfortable
+/// headroom while still catching obviously-corrupt or runaway inputs.
+const MAX_TRANSCRIPT_CHARS: usize = 500_000;
+
+/// Maximum size of a SOAP note re-fed into downstream document generation
+/// (referral / letter / synopsis). SOAP notes are AI-generated, so this is
+/// a sanity upper bound rather than an expected boundary.
+const MAX_SOAP_NOTE_CHARS: usize = 500_000;
+
+// ---------------------------------------------------------------------------
 // Progress event payload
 // ---------------------------------------------------------------------------
 
@@ -28,6 +47,19 @@ struct GenerationProgress {
     doc_type: String,
     status: String,
     recording_id: String,
+}
+
+/// Format an error for a `generation-progress` "failed" event. Falls back to a
+/// kind-tagged placeholder when `unwrap_app_error_message_ref` returns an empty
+/// or whitespace-only string, so the frontend never sees just `"failed: "`.
+fn format_progress_error(err: &AppError) -> String {
+    let msg = super::unwrap_app_error_message_ref(err);
+    let trimmed = msg.trim();
+    if trimmed.is_empty() {
+        format!("failed: unknown error ({})", err.kind_str())
+    } else {
+        format!("failed: {}", trimmed)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +214,18 @@ pub async fn generate_soap(
     template: Option<String>,
     context: Option<String>,
 ) -> AppResult<String> {
+    // Reject oversized user-supplied context up front, before emitting "started"
+    // or touching the DB / provider.
+    if let Some(ref ctx) = context {
+        if ctx.len() > MAX_CONTEXT_CHARS {
+            return Err(AppError::Other(format!(
+                "Context too large: {} chars, limit is {}",
+                ctx.len(),
+                MAX_CONTEXT_CHARS
+            )));
+        }
+    }
+
     // Emit: started
     let _ = app.emit(
         "generation-progress",
@@ -210,7 +254,7 @@ pub async fn generate_soap(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "soap".into(),
-                    status: format!("failed: {}", super::unwrap_app_error_message_ref(err)),
+                    status: format_progress_error(err),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -238,6 +282,14 @@ async fn generate_soap_inner(
         .ok_or_else(|| {
             AppError::Processing("Recording has no transcript. Run transcription first.".to_string())
         })?;
+
+    if transcript.len() > MAX_TRANSCRIPT_CHARS {
+        return Err(AppError::Other(format!(
+            "Transcript too large: {} chars, limit is {}",
+            transcript.len(),
+            MAX_TRANSCRIPT_CHARS
+        )));
+    }
 
     info!(
         provider = %provider.name(),
@@ -366,7 +418,7 @@ pub async fn generate_referral(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "referral".into(),
-                    status: format!("failed: {}", super::unwrap_app_error_message_ref(err)),
+                    status: format_progress_error(err),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -395,6 +447,14 @@ async fn generate_referral_inner(
                 "Recording has no SOAP note. Generate a SOAP note first.".to_string(),
             )
         })?;
+
+    if soap_note.len() > MAX_SOAP_NOTE_CHARS {
+        return Err(AppError::Other(format!(
+            "SOAP note too large: {} chars, limit is {}",
+            soap_note.len(),
+            MAX_SOAP_NOTE_CHARS
+        )));
+    }
 
     let recipient = recipient_type.unwrap_or("Specialist");
     let urg = urgency.unwrap_or("routine");
@@ -475,7 +535,7 @@ pub async fn generate_letter(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "letter".into(),
-                    status: format!("failed: {}", super::unwrap_app_error_message_ref(err)),
+                    status: format_progress_error(err),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -503,6 +563,14 @@ async fn generate_letter_inner(
                 "Recording has no SOAP note. Generate a SOAP note first.".to_string(),
             )
         })?;
+
+    if soap_note.len() > MAX_SOAP_NOTE_CHARS {
+        return Err(AppError::Other(format!(
+            "SOAP note too large: {} chars, limit is {}",
+            soap_note.len(),
+            MAX_SOAP_NOTE_CHARS
+        )));
+    }
 
     let ltype = letter_type.unwrap_or("follow-up");
 
@@ -565,6 +633,14 @@ pub async fn generate_synopsis(
                 "Recording has no SOAP note. Generate a SOAP note first.".to_string(),
             )
         })?;
+
+    if soap_note.len() > MAX_SOAP_NOTE_CHARS {
+        return Err(AppError::Other(format!(
+            "SOAP note too large: {} chars, limit is {}",
+            soap_note.len(),
+            MAX_SOAP_NOTE_CHARS
+        )));
+    }
 
     let (system_prompt, user_prompt) = document_generator::build_synopsis_prompt(soap_note, settings.custom_synopsis_prompt.as_deref());
 
