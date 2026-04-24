@@ -17,6 +17,14 @@ use medical_agents::agents::{
 
 use crate::state::AppState;
 
+/// Maximum total character count for conversation / message history sent to
+/// agents or chat completions. Protects against frontend-side loops or
+/// malicious payloads that would blow the provider's token limit or exhaust
+/// memory. 200k chars is roughly 50k tokens — well above any sane
+/// per-conversation size and below the 128k/200k context windows of modern
+/// models.
+const MAX_HISTORY_CHARS: usize = 200_000;
+
 // ---------------------------------------------------------------------------
 // Input / output types
 // ---------------------------------------------------------------------------
@@ -89,6 +97,19 @@ fn convert_messages(inputs: Vec<ChatMessageInput>) -> Vec<Message> {
         .collect()
 }
 
+/// Reject payloads whose aggregate message content exceeds `MAX_HISTORY_CHARS`.
+/// Called before any history is cloned into a provider request, to fail fast
+/// before we spend memory / tokens on an oversized request.
+fn check_history_size(messages: &[ChatMessageInput]) -> AppResult<()> {
+    let total: usize = messages.iter().map(|m| m.content.len()).sum();
+    if total > MAX_HISTORY_CHARS {
+        return Err(AppError::Other(format!(
+            "Conversation history too large: {total} chars, limit is {MAX_HISTORY_CHARS}"
+        )));
+    }
+    Ok(())
+}
+
 /// Look up an agent by name and return a boxed trait object.
 fn get_agent_by_name(name: &str) -> Option<Box<dyn Agent>> {
     match name {
@@ -119,6 +140,8 @@ pub async fn chat_send(
     model: Option<String>,
     system_prompt: Option<String>,
 ) -> AppResult<String> {
+    check_history_size(&messages)?;
+
     // Load model/temperature from settings when not explicitly provided
     let (settings_model, settings_temp) = load_chat_settings(&state)?;
 
@@ -162,6 +185,8 @@ pub async fn chat_stream(
     model: Option<String>,
     system_prompt: Option<String>,
 ) -> AppResult<()> {
+    check_history_size(&messages)?;
+
     // Load model/temperature from settings when not explicitly provided
     let (settings_model, settings_temp) = load_chat_settings(&state)?;
 
@@ -278,6 +303,19 @@ pub async fn chat_with_agent(
     agent_name: String,
     conversation_history: Option<Vec<ChatMessageInput>>,
 ) -> AppResult<serde_json::Value> {
+    // Guard against unbounded payloads: sum message + full history before we
+    // allocate an AgentContext or build a provider request.
+    let history_chars: usize = conversation_history
+        .as_ref()
+        .map(|h| h.iter().map(|m| m.content.len()).sum())
+        .unwrap_or(0);
+    let total = history_chars.saturating_add(message.len());
+    if total > MAX_HISTORY_CHARS {
+        return Err(AppError::Other(format!(
+            "Conversation history too large: {total} chars, limit is {MAX_HISTORY_CHARS}"
+        )));
+    }
+
     let agent = get_agent_by_name(&agent_name)
         .ok_or_else(|| AppError::Agent(format!("Unknown agent: '{agent_name}'")))?;
 
