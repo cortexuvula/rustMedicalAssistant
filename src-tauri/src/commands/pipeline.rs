@@ -81,12 +81,17 @@ pub async fn process_recording(
     // --- Stage 1: Transcribe ---
     emit_progress(&app, &rid, "transcribing", None);
 
-    let transcript_result = super::transcription::transcribe_recording(
+    // Forward the pipeline cancel flag through to the transcription inner
+    // helper so the user's cancel click can interrupt transcription at the
+    // STT-call boundary instead of waiting for the whole (often 30s+) pass
+    // to finish.
+    let transcript_result = super::transcription::transcribe_recording_inner(
         app.clone(),
         state.clone(),
         recording_id.clone(),
         None,       // language — use default
         Some(true), // diarize — medical encounters are multi-speaker
+        Some(&cancel),
     )
     .await;
 

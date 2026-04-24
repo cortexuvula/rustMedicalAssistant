@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -132,6 +133,26 @@ pub async fn transcribe_recording(
     language: Option<String>,
     diarize: Option<bool>,
 ) -> AppResult<String> {
+    // The #[tauri::command] wrapper: frontend callers can't supply a cancel
+    // flag, so we pass `None`. Pipeline callers should invoke
+    // `transcribe_recording_inner` directly with `Some(&cancel)` instead.
+    transcribe_recording_inner(app, state, recording_id, language, diarize, None).await
+}
+
+/// Inner implementation of [`transcribe_recording`] that accepts an optional
+/// cancel flag. The STT provider trait has no `transcribe_with_cancel` hook,
+/// so cancellation here is checkpoint-based: we bail out at stage boundaries
+/// (before the STT call and before vocabulary correction) rather than
+/// interrupting an in-flight Whisper pass. That's the minimum-viable
+/// propagation described in the pipeline-cancel audit fix.
+pub async fn transcribe_recording_inner(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    recording_id: String,
+    language: Option<String>,
+    diarize: Option<bool>,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> AppResult<String> {
     info!(
         language = language.as_deref().unwrap_or("auto"),
         diarize = diarize.unwrap_or(true),
@@ -238,6 +259,15 @@ pub async fn transcribe_recording(
         ..SttConfig::default()
     };
 
+    // Checkpoint: bail before the (potentially 30s+) STT call if cancelled.
+    if cancel.map_or(false, |c| c.load(Ordering::SeqCst)) {
+        let err_msg = "Transcription cancelled before STT start".to_string();
+        tracing::info!("{err_msg}");
+        mark_recording_failed_db_only(&state.db, recording, err_msg).await;
+        let _ = app.emit("transcription-progress", "failed");
+        return Err(AppError::Cancelled);
+    }
+
     // --- emit: transcribing ---
     let _ = app.emit("transcription-progress", "transcribing");
 
@@ -305,6 +335,15 @@ pub async fn transcribe_recording(
         return Err(AppError::Processing(
             mark_recording_failed(&app, &state.db, recording, err_msg).await,
         ));
+    }
+
+    // Checkpoint: bail before vocabulary correction if cancelled mid-STT.
+    if cancel.map_or(false, |c| c.load(Ordering::SeqCst)) {
+        let err_msg = "Transcription cancelled after STT completion".to_string();
+        tracing::info!("{err_msg}");
+        mark_recording_failed_db_only(&state.db, recording, err_msg).await;
+        let _ = app.emit("transcription-progress", "failed");
+        return Err(AppError::Cancelled);
     }
 
     // Apply vocabulary corrections if enabled
