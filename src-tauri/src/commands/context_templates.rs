@@ -121,15 +121,15 @@ pub fn apply_import(
 }
 
 /// Serialise templates to the canonical wrapped JSON form used for export.
-pub fn export_json(templates: &[ContextTemplate]) -> String {
+pub fn export_json(templates: &[ContextTemplate]) -> AppResult<String> {
     let map: BTreeMap<&str, &str> = templates
         .iter()
         .map(|t| (t.name.as_str(), t.body.as_str()))
         .collect();
-    serde_json::to_string_pretty(&serde_json::json!({
+    let json = serde_json::to_string_pretty(&serde_json::json!({
         "custom_context_templates": map,
-    }))
-    .expect("serialising context templates should never fail")
+    }))?;
+    Ok(json)
 }
 
 fn load_config(
@@ -234,7 +234,7 @@ pub async fn export_context_templates_json(
 ) -> AppResult<u32> {
     let config = load_config(&state)?;
     let count = config.custom_context_templates.len() as u32;
-    let json = export_json(&config.custom_context_templates);
+    let json = export_json(&config.custom_context_templates)?;
     tokio::fs::write(&file_path, json).await?;
     info!(count, path = %file_path, "Exported context templates");
     Ok(count)
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn export_produces_wrapped_form_and_round_trips() {
         let v = sample();
-        let json = export_json(&v);
+        let json = export_json(&v).expect("serialize");
         assert!(json.contains("custom_context_templates"));
         let reparsed = parse_import_json(&json).unwrap();
         assert_eq!(reparsed.len(), 2);
