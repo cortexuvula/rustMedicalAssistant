@@ -351,20 +351,60 @@ pub async fn transcribe_recording(
     };
 
     // Persist the transcript and mark as Completed — on a blocking thread.
-    let db = Arc::clone(&state.db);
+    // If persistence fails, route through mark_recording_failed so the frontend
+    // spinner clears and the user sees a real error instead of a stuck
+    // `Processing` state. The transcript text is logged via tracing::error! so
+    // operators can recover it manually from logs.
     let mut recording = recording;
     recording.transcript = Some(display_text.clone());
     recording.stt_provider = Some(transcript.provider.clone());
     recording.status = ProcessingStatus::Completed {
         completed_at: Utc::now(),
     };
-    tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
-        RecordingsRepo::update(&conn, &recording)
-            .map_err(|e| AppError::Database(e.to_string()))
+
+    let recording_for_failure = recording.clone();
+    let join_result = tokio::task::spawn_blocking({
+        let db = Arc::clone(&state.db);
+        let recording_owned = recording;
+        move || {
+            let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+            RecordingsRepo::update(&conn, &recording_owned)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            Ok::<(), AppError>(())
+        }
     })
-    .await
-    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
+    .await;
+
+    match join_result {
+        Ok(Ok(())) => { /* success — fall through to emit */ }
+        Ok(Err(db_err)) => {
+            let inner = unwrap_app_error_message(db_err);
+            let err_msg = format!(
+                "Transcription succeeded but failed to persist final status: {inner}"
+            );
+            tracing::error!(
+                recording_id = %recording_for_failure.id,
+                transcript = %display_text,
+                "{err_msg} — logging transcript for manual recovery"
+            );
+            return Err(AppError::Database(
+                mark_recording_failed(&app, &state.db, recording_for_failure, err_msg).await,
+            ));
+        }
+        Err(join_err) => {
+            let err_msg = format!(
+                "Transcription succeeded but DB persist task panicked: {join_err}"
+            );
+            tracing::error!(
+                recording_id = %recording_for_failure.id,
+                transcript = %display_text,
+                "{err_msg} — logging transcript for manual recovery"
+            );
+            return Err(AppError::Other(
+                mark_recording_failed(&app, &state.db, recording_for_failure, err_msg).await,
+            ));
+        }
+    }
 
     // --- emit: complete ---
     let _ = app.emit("transcription-progress", "complete");
