@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use tracing::{info, instrument};
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::types::settings::ContextTemplate;
 use medical_db::settings::SettingsRepo;
 
@@ -36,21 +37,23 @@ pub fn rename_in(
     templates: &mut Vec<ContextTemplate>,
     old_name: &str,
     new_name: String,
-) -> Result<ContextTemplate, String> {
+) -> AppResult<ContextTemplate> {
     if old_name == new_name {
         return templates
             .iter()
             .find(|t| t.name == old_name)
             .cloned()
-            .ok_or_else(|| format!("Template '{old_name}' not found"));
+            .ok_or_else(|| AppError::Config(format!("Template '{old_name}' not found")));
     }
     if templates.iter().any(|t| t.name == new_name) {
-        return Err(format!("A template named '{new_name}' already exists"));
+        return Err(AppError::Config(format!(
+            "A template named '{new_name}' already exists"
+        )));
     }
     let idx = templates
         .iter()
         .position(|t| t.name == old_name)
-        .ok_or_else(|| format!("Template '{old_name}' not found"))?;
+        .ok_or_else(|| AppError::Config(format!("Template '{old_name}' not found")))?;
     templates[idx].name = new_name;
     let renamed = templates[idx].clone();
     sort_templates(templates);
@@ -58,11 +61,11 @@ pub fn rename_in(
 }
 
 /// Remove a template by name.
-pub fn delete_in(templates: &mut Vec<ContextTemplate>, name: &str) -> Result<(), String> {
+pub fn delete_in(templates: &mut Vec<ContextTemplate>, name: &str) -> AppResult<()> {
     let idx = templates
         .iter()
         .position(|t| t.name == name)
-        .ok_or_else(|| format!("Template '{name}' not found"))?;
+        .ok_or_else(|| AppError::Config(format!("Template '{name}' not found")))?;
     templates.remove(idx);
     Ok(())
 }
@@ -82,9 +85,8 @@ enum ImportShape {
 }
 
 /// Parse any accepted JSON shape into a list of templates.
-pub fn parse_import_json(content: &str) -> Result<Vec<ContextTemplate>, String> {
-    let shape: ImportShape =
-        serde_json::from_str(content).map_err(|e| format!("Invalid JSON: {e}"))?;
+pub fn parse_import_json(content: &str) -> AppResult<Vec<ContextTemplate>> {
+    let shape: ImportShape = serde_json::from_str(content)?;
     Ok(match shape {
         ImportShape::Wrapped { custom_context_templates } => custom_context_templates
             .into_iter()
@@ -130,9 +132,12 @@ pub fn export_json(templates: &[ContextTemplate]) -> String {
     .expect("serialising context templates should never fail")
 }
 
-fn load_config(state: &tauri::State<'_, AppState>) -> Result<medical_core::types::settings::AppConfig, String> {
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
-    let mut config = SettingsRepo::load_config(&conn).map_err(|e| e.to_string())?;
+fn load_config(
+    state: &tauri::State<'_, AppState>,
+) -> AppResult<medical_core::types::settings::AppConfig> {
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+    let mut config =
+        SettingsRepo::load_config(&conn).map_err(|e| AppError::Database(e.to_string()))?;
     config.migrate();
     Ok(config)
 }
@@ -140,15 +145,15 @@ fn load_config(state: &tauri::State<'_, AppState>) -> Result<medical_core::types
 fn save_config(
     state: &tauri::State<'_, AppState>,
     config: &medical_core::types::settings::AppConfig,
-) -> Result<(), String> {
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
-    SettingsRepo::save_config(&conn, config).map_err(|e| e.to_string())
+) -> AppResult<()> {
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+    SettingsRepo::save_config(&conn, config).map_err(|e| AppError::Database(e.to_string()))
 }
 
 #[tauri::command]
 pub fn list_context_templates(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<ContextTemplate>, String> {
+) -> AppResult<Vec<ContextTemplate>> {
     let config = load_config(&state)?;
     let mut templates = config.custom_context_templates;
     sort_templates(&mut templates);
@@ -160,14 +165,14 @@ pub fn upsert_context_template(
     state: tauri::State<'_, AppState>,
     name: String,
     body: String,
-) -> Result<ContextTemplate, String> {
+) -> AppResult<ContextTemplate> {
     let name = name.trim().to_string();
     let body = body.trim().to_string();
     if name.is_empty() {
-        return Err("Template name cannot be empty".into());
+        return Err(AppError::Config("Template name cannot be empty".to_string()));
     }
     if body.is_empty() {
-        return Err("Template body cannot be empty".into());
+        return Err(AppError::Config("Template body cannot be empty".to_string()));
     }
     let mut config = load_config(&state)?;
     let result = upsert_into(&mut config.custom_context_templates, name, body);
@@ -181,10 +186,10 @@ pub fn rename_context_template(
     state: tauri::State<'_, AppState>,
     old_name: String,
     new_name: String,
-) -> Result<ContextTemplate, String> {
+) -> AppResult<ContextTemplate> {
     let new_name = new_name.trim().to_string();
     if new_name.is_empty() {
-        return Err("Template name cannot be empty".into());
+        return Err(AppError::Config("Template name cannot be empty".to_string()));
     }
     let old_name_log = old_name.clone();
     let mut config = load_config(&state)?;
@@ -198,7 +203,7 @@ pub fn rename_context_template(
 pub fn delete_context_template(
     state: tauri::State<'_, AppState>,
     name: String,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let mut config = load_config(&state)?;
     delete_in(&mut config.custom_context_templates, &name)?;
     save_config(&state, &config)?;
@@ -211,10 +216,8 @@ pub fn delete_context_template(
 pub async fn import_context_templates_json(
     state: tauri::State<'_, AppState>,
     file_path: String,
-) -> Result<u32, String> {
-    let content = tokio::fs::read_to_string(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+) -> AppResult<u32> {
+    let content = tokio::fs::read_to_string(&file_path).await?;
     let imported = parse_import_json(&content)?;
     let mut config = load_config(&state)?;
     let count = apply_import(&mut config.custom_context_templates, imported);
@@ -228,13 +231,11 @@ pub async fn import_context_templates_json(
 pub async fn export_context_templates_json(
     state: tauri::State<'_, AppState>,
     file_path: String,
-) -> Result<u32, String> {
+) -> AppResult<u32> {
     let config = load_config(&state)?;
     let count = config.custom_context_templates.len() as u32;
     let json = export_json(&config.custom_context_templates);
-    tokio::fs::write(&file_path, json)
-        .await
-        .map_err(|e| format!("Failed to write file: {e}"))?;
+    tokio::fs::write(&file_path, json).await?;
     info!(count, path = %file_path, "Exported context templates");
     Ok(count)
 }
@@ -292,7 +293,7 @@ mod tests {
     fn rename_to_existing_name_errors() {
         let mut v = sample();
         let err = rename_in(&mut v, "Follow-up", "Telehealth".into()).unwrap_err();
-        assert!(err.contains("already exists"));
+        assert!(err.to_string().contains("already exists"));
     }
 
     #[test]
@@ -306,7 +307,7 @@ mod tests {
     fn rename_missing_errors() {
         let mut v = sample();
         let err = rename_in(&mut v, "Missing", "Other".into()).unwrap_err();
-        assert!(err.contains("not found"));
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]

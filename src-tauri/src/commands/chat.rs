@@ -4,6 +4,7 @@ use tauri::Emitter;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::traits::Agent;
 use medical_core::types::{
     AgentContext, CompletionRequest, Message, MessageContent, Role, StreamChunk, UsageInfo,
@@ -114,7 +115,7 @@ pub async fn chat_send(
     messages: Vec<ChatMessageInput>,
     model: Option<String>,
     system_prompt: Option<String>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     // Load model/temperature from settings when not explicitly provided
     let (settings_model, settings_temp) = load_chat_settings(&state);
 
@@ -122,7 +123,7 @@ pub async fn chat_send(
         let registry = state.ai_providers.lock().await;
         registry.get_active_arc()
     }
-    .ok_or_else(|| "No active AI provider configured".to_string())?;
+    .ok_or_else(|| AppError::AiProvider("No active AI provider configured".to_string()))?;
 
     let core_messages = convert_messages(messages);
 
@@ -139,7 +140,7 @@ pub async fn chat_send(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| format!("AI completion failed: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
 
     Ok(response.content)
 }
@@ -157,7 +158,7 @@ pub async fn chat_stream(
     messages: Vec<ChatMessageInput>,
     model: Option<String>,
     system_prompt: Option<String>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     // Load model/temperature from settings when not explicitly provided
     let (settings_model, settings_temp) = load_chat_settings(&state);
 
@@ -165,7 +166,7 @@ pub async fn chat_stream(
         let registry = state.ai_providers.lock().await;
         registry.get_active_arc()
     }
-    .ok_or_else(|| "No active AI provider configured".to_string())?;
+    .ok_or_else(|| AppError::AiProvider("No active AI provider configured".to_string()))?;
 
     let core_messages = convert_messages(messages);
 
@@ -182,7 +183,7 @@ pub async fn chat_stream(
     let mut stream = provider
         .complete_stream(request)
         .await
-        .map_err(|e| format!("Failed to start streaming: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("Failed to start streaming: {e}")))?;
 
     // Consume the stream in a background task so the command returns immediately.
     tokio::spawn(async move {
@@ -243,15 +244,15 @@ pub async fn chat_with_agent(
     message: String,
     agent_name: String,
     conversation_history: Option<Vec<ChatMessageInput>>,
-) -> Result<serde_json::Value, String> {
+) -> AppResult<serde_json::Value> {
     let agent = get_agent_by_name(&agent_name)
-        .ok_or_else(|| format!("Unknown agent: '{agent_name}'"))?;
+        .ok_or_else(|| AppError::Agent(format!("Unknown agent: '{agent_name}'")))?;
 
     let provider = {
         let registry = state.ai_providers.lock().await;
         registry.get_active_arc()
     }
-    .ok_or_else(|| "No active AI provider configured".to_string())?;
+    .ok_or_else(|| AppError::AiProvider("No active AI provider configured".to_string()))?;
 
     let history = conversation_history
         .map(convert_messages)
@@ -278,16 +279,16 @@ pub async fn chat_with_agent(
         .orchestrator
         .execute(agent.as_ref(), context, provider.as_ref(), &model, cancel)
         .await
-        .map_err(|e| format!("Agent execution failed: {e}"))?;
+        .map_err(|e| AppError::Agent(format!("Agent execution failed: {e}")))?;
 
-    serde_json::to_value(&response).map_err(|e| format!("Serialization failed: {e}"))
+    Ok(serde_json::to_value(&response)?)
 }
 
 /// List all registered AI provider names.
 #[tauri::command]
 pub async fn list_ai_providers(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+) -> AppResult<Vec<String>> {
     let registry = state.ai_providers.lock().await;
     Ok(registry.list_available())
 }
@@ -298,7 +299,7 @@ pub async fn list_ai_providers(
 pub async fn set_active_provider(
     state: tauri::State<'_, AppState>,
     name: String,
-) -> Result<bool, String> {
+) -> AppResult<bool> {
     let mut registry = state.ai_providers.lock().await;
     Ok(registry.set_active(&name))
 }
@@ -308,7 +309,7 @@ pub async fn set_active_provider(
 pub async fn list_models(
     state: tauri::State<'_, AppState>,
     provider_name: Option<String>,
-) -> Result<Vec<medical_core::types::ModelInfo>, String> {
+) -> AppResult<Vec<medical_core::types::ModelInfo>> {
     let provider = {
         let registry = state.ai_providers.lock().await;
         match provider_name {
@@ -316,6 +317,10 @@ pub async fn list_models(
             None => registry.get_active_arc(),
         }
     };
-    let provider = provider.ok_or("Provider not found or not configured")?;
-    provider.available_models().await.map_err(|e| e.to_string())
+    let provider = provider
+        .ok_or_else(|| AppError::AiProvider("Provider not found or not configured".to_string()))?;
+    provider
+        .available_models()
+        .await
+        .map_err(|e| AppError::AiProvider(e.to_string()))
 }

@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 
+use medical_core::error::{AppError, AppResult};
+
 /// Return the path to the log directory.
 #[tauri::command]
 pub fn get_log_path() -> String {
@@ -17,13 +19,13 @@ pub fn get_log_path() -> String {
 ///
 /// Useful for an in-app log viewer or for attaching to bug reports.
 #[tauri::command]
-pub fn get_recent_logs(lines: Option<usize>) -> Result<String, String> {
+pub fn get_recent_logs(lines: Option<usize>) -> AppResult<String> {
     let max_lines = lines.unwrap_or(200);
     let dir = log_dir();
 
     // Find the most recently modified .log file
     let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("Cannot read log dir: {e}"))?;
+    let entries = std::fs::read_dir(&dir)?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("log") {
@@ -40,10 +42,9 @@ pub fn get_recent_logs(lines: Option<usize>) -> Result<String, String> {
 
     let log_path = newest
         .map(|(_, p)| p)
-        .ok_or_else(|| "No log files found".to_string())?;
+        .ok_or_else(|| AppError::Other("No log files found".to_string()))?;
 
-    let content =
-        std::fs::read_to_string(&log_path).map_err(|e| format!("Cannot read log file: {e}"))?;
+    let content = std::fs::read_to_string(&log_path)?;
 
     let tail: Vec<&str> = content.lines().rev().take(max_lines).collect();
     let result: Vec<&str> = tail.into_iter().rev().collect();

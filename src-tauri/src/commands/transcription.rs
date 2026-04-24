@@ -75,29 +75,7 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, AppError>
     })
 }
 
-/// Extract the inner payload from an `AppError`, avoiding thiserror's
-/// category-prefix (e.g., `"Processing error: "`). Used when re-wrapping
-/// an existing `AppError` so we don't double-prefix the stored/emitted message.
-fn unwrap_app_error_message(err: AppError) -> String {
-    match err {
-        AppError::Database(s)
-        | AppError::Security(s)
-        | AppError::Audio(s)
-        | AppError::AiProvider(s)
-        | AppError::SttProvider(s)
-        | AppError::TtsProvider(s)
-        | AppError::Agent(s)
-        | AppError::Rag(s)
-        | AppError::Processing(s)
-        | AppError::Export(s)
-        | AppError::Translation(s)
-        | AppError::Config(s)
-        | AppError::Other(s) => s,
-        AppError::Io(e) => e.to_string(),
-        AppError::Serialization(e) => e.to_string(),
-        AppError::Cancelled => "Cancelled".to_string(),
-    }
-}
+use super::unwrap_app_error_message;
 
 /// Persist `Failed` status for a recording. Ignores DB errors — the caller is
 /// already returning the original error, so a DB write failure here would only
@@ -518,7 +496,10 @@ mod tests {
         // AppError::Processing has a "Processing error: " display prefix — the helper
         // must return the raw inner string, not the Display output.
         let err = AppError::Processing("Failed to open WAV: foo".to_string());
-        assert_eq!(super::unwrap_app_error_message(err), "Failed to open WAV: foo");
+        assert_eq!(
+            crate::commands::unwrap_app_error_message(err),
+            "Failed to open WAV: foo"
+        );
     }
 
     #[test]

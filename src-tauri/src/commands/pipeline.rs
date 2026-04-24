@@ -8,6 +8,7 @@ use tauri::Emitter;
 use tracing::{info, error, instrument, warn};
 use uuid::Uuid;
 
+use medical_core::error::{AppError, AppResult};
 use medical_db::recordings::RecordingsRepo;
 
 use crate::state::AppState;
@@ -32,7 +33,7 @@ pub async fn process_recording(
     recording_id: String,
     context: Option<String>,
     template: Option<String>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     info!(
         has_context = context.is_some(),
         template = template.as_deref().unwrap_or("default"),
@@ -87,13 +88,15 @@ pub async fn process_recording(
         None,       // language — use default
         Some(true), // diarize — medical encounters are multi-speaker
     )
-    .await
-    .map_err(|e| e.to_string());
+    .await;
 
-    if let Err(ref e) = transcript_result {
-        error!(error = %e, "Pipeline failed at transcription stage");
-        emit_progress(&app, &rid, "failed", Some(e.clone()));
-        return Err(e.clone());
+    if let Err(e) = transcript_result {
+        let msg = e.to_string();
+        error!(error = %msg, "Pipeline failed at transcription stage");
+        emit_progress(&app, &rid, "failed", Some(msg));
+        // Return the original typed error so the frontend receives a
+        // structured {kind, message} payload instead of a plain string.
+        return Err(e);
     }
 
     info!("Pipeline stage 1 complete: transcription succeeded");
@@ -102,7 +105,7 @@ pub async fn process_recording(
         let msg = "Pipeline cancelled by user after transcription".to_string();
         warn!("{msg}");
         emit_progress(&app, &rid, "failed", Some(msg.clone()));
-        return Err(msg);
+        return Err(AppError::Cancelled);
     }
 
     // --- Stage 2: Generate SOAP ---
@@ -137,8 +140,9 @@ pub async fn process_recording(
             Ok(soap_text)
         }
         Err(e) => {
-            error!(error = %e, "Pipeline failed at SOAP generation stage");
-            emit_progress(&app, &rid, "failed", Some(e.clone()));
+            let msg = e.to_string();
+            error!(error = %msg, "Pipeline failed at SOAP generation stage");
+            emit_progress(&app, &rid, "failed", Some(msg));
             Err(e)
         }
     }
@@ -197,11 +201,11 @@ impl Drop for CancelGuard {
 pub fn cancel_pipeline(
     state: tauri::State<'_, AppState>,
     recording_id: String,
-) -> Result<bool, String> {
+) -> AppResult<bool> {
     let guard = state
         .pipeline_cancels
         .lock()
-        .map_err(|_| "pipeline_cancels mutex poisoned".to_string())?;
+        .map_err(|_| AppError::Other("pipeline_cancels mutex poisoned".to_string()))?;
     if let Some(flag) = guard.get(&recording_id) {
         flag.store(true, Ordering::SeqCst);
         info!(recording_id = %recording_id, "Pipeline cancel requested");

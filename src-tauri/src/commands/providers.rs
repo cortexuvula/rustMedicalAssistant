@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use tracing::info;
 
+use medical_core::error::{AppError, AppResult};
+
 use crate::state::{self, AppState};
 
 /// Rebuild AI + STT provider registries (e.g. after LM Studio host/port changes).
@@ -10,12 +12,12 @@ use crate::state::{self, AppState};
 #[tauri::command]
 pub async fn reinit_providers(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+) -> AppResult<Vec<String>> {
     // Load saved settings for provider config (host, port, active provider, whisper model)
     let config = {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
+        let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
         let mut cfg = medical_db::settings::SettingsRepo::load_config(&conn)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::Database(e.to_string()))?;
         cfg.migrate();
         cfg
     };
@@ -50,7 +52,7 @@ pub async fn reinit_providers(
 /// Makes a GET request to `http://{host}:{port}/v1/models` with a 5-second
 /// timeout. Returns a success message with the model count, or an error.
 #[tauri::command]
-pub async fn test_lmstudio_connection(host: String, port: u16) -> Result<String, String> {
+pub async fn test_lmstudio_connection(host: String, port: u16) -> AppResult<String> {
     let effective_host = if host.is_empty() { "localhost".to_string() } else { host };
     let url = format!("http://{}:{}/v1/models", effective_host, port);
 
@@ -60,31 +62,36 @@ pub async fn test_lmstudio_connection(host: String, port: u16) -> Result<String,
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("Failed to build HTTP client: {e}")))?;
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_connect() {
-                format!("Connection refused — is LM Studio running at {}:{}?", effective_host, port)
-            } else if e.is_timeout() {
-                format!("Connection timed out — check that {}:{} is reachable", effective_host, port)
-            } else {
-                format!("Connection failed: {e}")
-            }
-        })?;
+    let response = client.get(&url).send().await.map_err(|e| {
+        if e.is_connect() {
+            AppError::AiProvider(format!(
+                "Connection refused — is LM Studio running at {}:{}?",
+                effective_host, port
+            ))
+        } else if e.is_timeout() {
+            AppError::AiProvider(format!(
+                "Connection timed out — check that {}:{} is reachable",
+                effective_host, port
+            ))
+        } else {
+            AppError::AiProvider(format!("Connection failed: {e}"))
+        }
+    })?;
 
     if !response.status().is_success() {
-        return Err(format!("Server returned HTTP {}", response.status()));
+        return Err(AppError::AiProvider(format!(
+            "Server returned HTTP {}",
+            response.status()
+        )));
     }
 
     // Parse the OpenAI-compatible models response to count models
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Invalid response from server: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("Invalid response from server: {e}")))?;
 
     let model_count = body
         .get("data")
@@ -92,7 +99,11 @@ pub async fn test_lmstudio_connection(host: String, port: u16) -> Result<String,
         .map(|a| a.len())
         .unwrap_or(0);
 
-    Ok(format!("Connected — {} model{} available", model_count, if model_count == 1 { "" } else { "s" }))
+    Ok(format!(
+        "Connected — {} model{} available",
+        model_count,
+        if model_count == 1 { "" } else { "s" }
+    ))
 }
 
 /// Test connectivity to a remote Whisper server (OpenAI-compatible).
@@ -105,7 +116,7 @@ pub async fn test_stt_remote_connection(
     host: String,
     port: u16,
     api_key: Option<String>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let effective_host = if host.is_empty() { "localhost".to_string() } else { host };
     let url = format!("http://{}:{}/v1/models", effective_host, port);
 
@@ -115,7 +126,7 @@ pub async fn test_stt_remote_connection(
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+        .map_err(|e| AppError::SttProvider(format!("Failed to build HTTP client: {e}")))?;
 
     let mut req = client.get(&url);
     if let Some(key) = api_key.as_deref().filter(|s| !s.is_empty()) {
@@ -124,27 +135,38 @@ pub async fn test_stt_remote_connection(
 
     let response = req.send().await.map_err(|e| {
         if e.is_connect() {
-            format!("Connection refused — is the Whisper server running at {}:{}?", effective_host, port)
+            AppError::SttProvider(format!(
+                "Connection refused — is the Whisper server running at {}:{}?",
+                effective_host, port
+            ))
         } else if e.is_timeout() {
-            format!("Connection timed out — check that {}:{} is reachable", effective_host, port)
+            AppError::SttProvider(format!(
+                "Connection timed out — check that {}:{} is reachable",
+                effective_host, port
+            ))
         } else {
-            format!("Connection failed: {e}")
+            AppError::SttProvider(format!("Connection failed: {e}"))
         }
     })?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED
         || response.status() == reqwest::StatusCode::FORBIDDEN
     {
-        return Err("Authentication failed — check API key".into());
+        return Err(AppError::SttProvider(
+            "Authentication failed — check API key".to_string(),
+        ));
     }
     if !response.status().is_success() {
-        return Err(format!("Server returned HTTP {}", response.status()));
+        return Err(AppError::SttProvider(format!(
+            "Server returned HTTP {}",
+            response.status()
+        )));
     }
 
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Invalid response from server: {e}"))?;
+        .map_err(|e| AppError::SttProvider(format!("Invalid response from server: {e}")))?;
 
     let model_count = body
         .get("data")
@@ -165,7 +187,7 @@ pub async fn test_stt_remote_connection(
 /// timeout. Returns a success message including the installed-model count,
 /// or a user-readable error.
 #[tauri::command]
-pub async fn test_ollama_connection(host: String, port: u16) -> Result<String, String> {
+pub async fn test_ollama_connection(host: String, port: u16) -> AppResult<String> {
     let effective_host = if host.is_empty() { "localhost".to_string() } else { host };
     let url = format!("http://{}:{}/api/tags", effective_host, port);
 
@@ -175,26 +197,35 @@ pub async fn test_ollama_connection(host: String, port: u16) -> Result<String, S
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(5))
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("Failed to build HTTP client: {e}")))?;
 
     let response = client.get(&url).send().await.map_err(|e| {
         if e.is_connect() {
-            format!("Connection refused — is Ollama running at {}:{}?", effective_host, port)
+            AppError::AiProvider(format!(
+                "Connection refused — is Ollama running at {}:{}?",
+                effective_host, port
+            ))
         } else if e.is_timeout() {
-            format!("Connection timed out — check that {}:{} is reachable", effective_host, port)
+            AppError::AiProvider(format!(
+                "Connection timed out — check that {}:{} is reachable",
+                effective_host, port
+            ))
         } else {
-            format!("Connection failed: {e}")
+            AppError::AiProvider(format!("Connection failed: {e}"))
         }
     })?;
 
     if !response.status().is_success() {
-        return Err(format!("Server returned HTTP {}", response.status()));
+        return Err(AppError::AiProvider(format!(
+            "Server returned HTTP {}",
+            response.status()
+        )));
     }
 
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Invalid response from server: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("Invalid response from server: {e}")))?;
 
     let model_count = body
         .get("models")

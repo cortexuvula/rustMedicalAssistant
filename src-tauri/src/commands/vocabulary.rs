@@ -5,6 +5,7 @@ use serde::Deserialize;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::types::vocabulary::{CorrectionResult, VocabularyCategory, VocabularyEntry};
 use medical_db::vocabulary::VocabularyRepo;
 use medical_processing::vocabulary_corrector;
@@ -15,20 +16,23 @@ use crate::state::AppState;
 pub async fn list_vocabulary_entries(
     state: tauri::State<'_, AppState>,
     category: Option<String>,
-) -> Result<Vec<VocabularyEntry>, String> {
+) -> AppResult<Vec<VocabularyEntry>> {
     let db = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
         match category {
             Some(cat) => {
                 let cat = VocabularyCategory::from_str(&cat);
-                VocabularyRepo::list_by_category(&conn, &cat).map_err(|e| e.to_string())
+                VocabularyRepo::list_by_category(&conn, &cat)
+                    .map_err(|e| AppError::Database(e.to_string()))
             }
-            None => VocabularyRepo::list_all(&conn).map_err(|e| e.to_string()),
+            None => {
+                VocabularyRepo::list_all(&conn).map_err(|e| AppError::Database(e.to_string()))
+            }
         }
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
@@ -40,7 +44,7 @@ pub async fn add_vocabulary_entry(
     case_sensitive: Option<bool>,
     priority: Option<i32>,
     enabled: Option<bool>,
-) -> Result<VocabularyEntry, String> {
+) -> AppResult<VocabularyEntry> {
     let now = Utc::now();
     let entry = VocabularyEntry {
         id: Uuid::new_v4(),
@@ -56,11 +60,11 @@ pub async fn add_vocabulary_entry(
     let db = Arc::clone(&state.db);
     let entry_clone = entry.clone();
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::insert(&conn, &entry_clone).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::insert(&conn, &entry_clone).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
     info!(find = %entry.find_text, "Vocabulary entry added");
     Ok(entry)
 }
@@ -75,17 +79,18 @@ pub async fn update_vocabulary_entry(
     case_sensitive: Option<bool>,
     priority: Option<i32>,
     enabled: Option<bool>,
-) -> Result<VocabularyEntry, String> {
-    let uuid = Uuid::parse_str(&id).map_err(|e| format!("Invalid ID: {e}"))?;
+) -> AppResult<VocabularyEntry> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|e| AppError::Other(format!("Invalid ID: {e}")))?;
     let db = Arc::clone(&state.db);
     let db2 = Arc::clone(&state.db);
 
     let existing = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::get_by_id(&conn, &uuid).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     let entry = VocabularyEntry {
         id: existing.id,
@@ -103,11 +108,11 @@ pub async fn update_vocabulary_entry(
 
     let entry_clone = entry.clone();
     tokio::task::spawn_blocking(move || {
-        let conn = db2.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::update(&conn, &entry_clone).map_err(|e| e.to_string())
+        let conn = db2.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::update(&conn, &entry_clone).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
     Ok(entry)
 }
 
@@ -115,41 +120,42 @@ pub async fn update_vocabulary_entry(
 pub async fn delete_vocabulary_entry(
     state: tauri::State<'_, AppState>,
     id: String,
-) -> Result<(), String> {
-    let uuid = Uuid::parse_str(&id).map_err(|e| format!("Invalid ID: {e}"))?;
+) -> AppResult<()> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|e| AppError::Other(format!("Invalid ID: {e}")))?;
     let db = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::delete(&conn, &uuid).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::delete(&conn, &uuid).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
 pub async fn delete_all_vocabulary_entries(
     state: tauri::State<'_, AppState>,
-) -> Result<u32, String> {
+) -> AppResult<u32> {
     let db = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::delete_all(&conn).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::delete_all(&conn).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
 pub async fn get_vocabulary_count(
     state: tauri::State<'_, AppState>,
-) -> Result<(u32, u32), String> {
+) -> AppResult<(u32, u32)> {
     let db = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::count(&conn).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::count(&conn).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
@@ -157,10 +163,8 @@ pub async fn get_vocabulary_count(
 pub async fn import_vocabulary_json(
     state: tauri::State<'_, AppState>,
     file_path: String,
-) -> Result<u32, String> {
-    let content = tokio::fs::read_to_string(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+) -> AppResult<u32> {
+    let content = tokio::fs::read_to_string(&file_path).await?;
 
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -182,8 +186,7 @@ pub async fn import_vocabulary_json(
         enabled: Option<bool>,
     }
 
-    let data: ImportFile =
-        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON format: {e}"))?;
+    let data: ImportFile = serde_json::from_str(&content)?;
     let corrections = match data {
         ImportFile::Wrapped { corrections } => corrections,
         ImportFile::Bare(list) => list,
@@ -209,14 +212,14 @@ pub async fn import_vocabulary_json(
     let count = entries.len() as u32;
     let db = Arc::clone(&state.db);
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
         for entry in &entries {
-            VocabularyRepo::upsert(&conn, entry).map_err(|e| e.to_string())?;
+            VocabularyRepo::upsert(&conn, entry).map_err(|e| AppError::Database(e.to_string()))?;
         }
-        Ok::<_, String>(())
+        Ok::<_, AppError>(())
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     info!(count, path = %file_path, "Imported vocabulary entries");
     Ok(count)
@@ -227,14 +230,14 @@ pub async fn import_vocabulary_json(
 pub async fn export_vocabulary_json(
     state: tauri::State<'_, AppState>,
     file_path: String,
-) -> Result<u32, String> {
+) -> AppResult<u32> {
     let db = Arc::clone(&state.db);
     let entries = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::list_all(&conn).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::list_all(&conn).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     let count = entries.len() as u32;
     let export = serde_json::json!({
@@ -249,11 +252,8 @@ pub async fn export_vocabulary_json(
         })).collect::<Vec<_>>()
     });
 
-    let json = serde_json::to_string_pretty(&export)
-        .map_err(|e| format!("JSON serialization error: {e}"))?;
-    tokio::fs::write(&file_path, json)
-        .await
-        .map_err(|e| format!("Failed to write file: {e}"))?;
+    let json = serde_json::to_string_pretty(&export)?;
+    tokio::fs::write(&file_path, json).await?;
 
     info!(count, path = %file_path, "Exported vocabulary entries");
     Ok(count)
@@ -263,14 +263,14 @@ pub async fn export_vocabulary_json(
 pub async fn test_vocabulary_correction(
     state: tauri::State<'_, AppState>,
     text: String,
-) -> Result<CorrectionResult, String> {
+) -> AppResult<CorrectionResult> {
     let db = Arc::clone(&state.db);
     let entries = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        VocabularyRepo::list_enabled(&conn).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        VocabularyRepo::list_enabled(&conn).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     Ok(vocabulary_corrector::apply_corrections(&text, &entries))
 }

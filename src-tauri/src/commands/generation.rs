@@ -7,6 +7,7 @@ use tauri::Emitter;
 use tracing::{debug, info, error, instrument};
 use uuid::Uuid;
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::traits::AiProvider;
 use medical_core::types::recording::Recording;
 use medical_core::types::{CompletionRequest, Message, MessageContent, Role};
@@ -52,16 +53,16 @@ struct GenerationSettings {
 async fn load_recording_and_settings(
     db: &Arc<medical_db::Database>,
     recording_id: &str,
-) -> Result<(Recording, GenerationSettings), String> {
-    let uuid =
-        Uuid::parse_str(recording_id).map_err(|e| format!("Invalid recording ID: {e}"))?;
+) -> AppResult<(Recording, GenerationSettings)> {
+    let uuid = Uuid::parse_str(recording_id)
+        .map_err(|e| AppError::Other(format!("Invalid recording ID: {e}")))?;
     let db = Arc::clone(db);
 
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
 
-        let recording =
-            RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?;
+        let recording = RecordingsRepo::get_by_id(&conn, &uuid)
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
         let config = medical_db::settings::SettingsRepo::load_config(&conn)
             .ok()
@@ -96,36 +97,40 @@ async fn load_recording_and_settings(
             },
         };
 
-        Ok((recording, settings))
+        Ok::<_, AppError>((recording, settings))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
 }
 
 /// Resolve the AI provider from the registry using the settings provider name.
 async fn resolve_provider(
     state: &AppState,
     provider_name: &str,
-) -> Result<Arc<dyn AiProvider>, String> {
+) -> AppResult<Arc<dyn AiProvider>> {
     let registry = state.ai_providers.lock().await;
     registry
         .get_arc(provider_name)
         .or_else(|| registry.get_active_arc())
-        .ok_or_else(|| "No AI provider configured. Check LM Studio / Ollama settings.".to_string())
+        .ok_or_else(|| {
+            AppError::AiProvider(
+                "No AI provider configured. Check LM Studio / Ollama settings.".to_string(),
+            )
+        })
 }
 
 /// Persist a recording update on a blocking thread.
 async fn persist_recording(
     db: &Arc<medical_db::Database>,
     recording: Recording,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let db = Arc::clone(db);
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        RecordingsRepo::update(&conn, &recording).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
 }
 
 /// Parse a template string into the `SoapTemplate` enum.
@@ -176,7 +181,7 @@ pub async fn generate_soap(
     recording_id: String,
     template: Option<String>,
     context: Option<String>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     // Emit: started
     let _ = app.emit(
         "generation-progress",
@@ -200,12 +205,12 @@ pub async fn generate_soap(
                 },
             );
         }
-        Err(msg) => {
+        Err(err) => {
             let _ = app.emit(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "soap".into(),
-                    status: format!("failed: {msg}"),
+                    status: format!("failed: {err}"),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -221,7 +226,7 @@ async fn generate_soap_inner(
     recording_id: &str,
     template: Option<&str>,
     context: Option<&str>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let (mut recording, settings) =
         load_recording_and_settings(&state.db, recording_id).await?;
     let provider = resolve_provider(state, &settings.ai_provider).await?;
@@ -230,7 +235,9 @@ async fn generate_soap_inner(
         .transcript
         .as_deref()
         .filter(|t| !t.is_empty())
-        .ok_or("Recording has no transcript. Run transcription first.")?;
+        .ok_or_else(|| {
+            AppError::Processing("Recording has no transcript. Run transcription first.".to_string())
+        })?;
 
     info!(
         provider = %provider.name(),
@@ -271,7 +278,7 @@ async fn generate_soap_inner(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| format!("AI completion failed: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
 
     let raw_soap = response.content;
     if raw_soap.is_empty() {
@@ -280,12 +287,12 @@ async fn generate_soap_inner(
             model = %model_name,
             "AI returned an empty SOAP note"
         );
-        return Err(format!(
+        return Err(AppError::AiProvider(format!(
             "AI returned an empty SOAP note (provider: {}, model: {}). \
              Check that the model is loaded and responding.",
             provider.name(),
             model_name,
-        ));
+        )));
     }
 
     info!(
@@ -325,7 +332,7 @@ pub async fn generate_referral(
     recording_id: String,
     recipient_type: Option<String>,
     urgency: Option<String>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let _ = app.emit(
         "generation-progress",
         GenerationProgress {
@@ -354,12 +361,12 @@ pub async fn generate_referral(
                 },
             );
         }
-        Err(msg) => {
+        Err(err) => {
             let _ = app.emit(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "referral".into(),
-                    status: format!("failed: {msg}"),
+                    status: format!("failed: {err}"),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -374,7 +381,7 @@ async fn generate_referral_inner(
     recording_id: &str,
     recipient_type: Option<&str>,
     urgency: Option<&str>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let (mut recording, settings) =
         load_recording_and_settings(&state.db, recording_id).await?;
     let provider = resolve_provider(state, &settings.ai_provider).await?;
@@ -383,7 +390,11 @@ async fn generate_referral_inner(
         .soap_note
         .as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or("Recording has no SOAP note. Generate a SOAP note first.")?;
+        .ok_or_else(|| {
+            AppError::Processing(
+                "Recording has no SOAP note. Generate a SOAP note first.".to_string(),
+            )
+        })?;
 
     let recipient = recipient_type.unwrap_or("Specialist");
     let urg = urgency.unwrap_or("routine");
@@ -410,11 +421,13 @@ async fn generate_referral_inner(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| format!("AI completion failed: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
 
     let referral_text = response.content;
     if referral_text.is_empty() {
-        return Err("AI returned an empty referral letter.".into());
+        return Err(AppError::AiProvider(
+            "AI returned an empty referral letter.".to_string(),
+        ));
     }
 
     // Persist to DB (on blocking thread)
@@ -433,7 +446,7 @@ pub async fn generate_letter(
     state: tauri::State<'_, AppState>,
     recording_id: String,
     letter_type: Option<String>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let _ = app.emit(
         "generation-progress",
         GenerationProgress {
@@ -457,12 +470,12 @@ pub async fn generate_letter(
                 },
             );
         }
-        Err(msg) => {
+        Err(err) => {
             let _ = app.emit(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "letter".into(),
-                    status: format!("failed: {msg}"),
+                    status: format!("failed: {err}"),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -476,7 +489,7 @@ async fn generate_letter_inner(
     state: &AppState,
     recording_id: &str,
     letter_type: Option<&str>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let (mut recording, settings) =
         load_recording_and_settings(&state.db, recording_id).await?;
     let provider = resolve_provider(state, &settings.ai_provider).await?;
@@ -485,7 +498,11 @@ async fn generate_letter_inner(
         .soap_note
         .as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or("Recording has no SOAP note. Generate a SOAP note first.")?;
+        .ok_or_else(|| {
+            AppError::Processing(
+                "Recording has no SOAP note. Generate a SOAP note first.".to_string(),
+            )
+        })?;
 
     let ltype = letter_type.unwrap_or("follow-up");
 
@@ -510,11 +527,13 @@ async fn generate_letter_inner(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| format!("AI completion failed: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
 
     let letter_text = response.content;
     if letter_text.is_empty() {
-        return Err("AI returned an empty letter.".into());
+        return Err(AppError::AiProvider(
+            "AI returned an empty letter.".to_string(),
+        ));
     }
 
     // Persist to DB (on blocking thread)
@@ -532,7 +551,7 @@ async fn generate_letter_inner(
 pub async fn generate_synopsis(
     state: tauri::State<'_, AppState>,
     recording_id: String,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let (mut recording, settings) =
         load_recording_and_settings(&state.db, &recording_id).await?;
     let provider = resolve_provider(&state, &settings.ai_provider).await?;
@@ -541,7 +560,11 @@ pub async fn generate_synopsis(
         .soap_note
         .as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or("Recording has no SOAP note. Generate a SOAP note first.")?;
+        .ok_or_else(|| {
+            AppError::Processing(
+                "Recording has no SOAP note. Generate a SOAP note first.".to_string(),
+            )
+        })?;
 
     let (system_prompt, user_prompt) = document_generator::build_synopsis_prompt(soap_note, settings.custom_synopsis_prompt.as_deref());
 
@@ -562,11 +585,13 @@ pub async fn generate_synopsis(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| format!("AI completion failed: {e}"))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
 
     let synopsis_text = response.content;
     if synopsis_text.is_empty() {
-        return Err("AI returned an empty synopsis.".into());
+        return Err(AppError::AiProvider(
+            "AI returned an empty synopsis.".to_string(),
+        ));
     }
 
     // Store synopsis in the metadata JSON object.

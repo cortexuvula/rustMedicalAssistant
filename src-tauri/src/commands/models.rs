@@ -3,6 +3,7 @@
 use serde::Serialize;
 use tauri::Emitter;
 
+use medical_core::error::{AppError, AppResult};
 use medical_stt_providers::models as stt_models;
 
 use crate::state::AppState;
@@ -18,7 +19,7 @@ struct ModelDownloadProgress {
 #[tauri::command]
 pub async fn list_whisper_models(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<stt_models::ModelInfo>, String> {
+) -> AppResult<Vec<stt_models::ModelInfo>> {
     Ok(stt_models::available_whisper_models(&state.data_dir))
 }
 
@@ -26,7 +27,7 @@ pub async fn list_whisper_models(
 #[tauri::command]
 pub async fn list_pyannote_models(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<stt_models::ModelInfo>, String> {
+) -> AppResult<Vec<stt_models::ModelInfo>> {
     Ok(stt_models::available_pyannote_models(&state.data_dir))
 }
 
@@ -38,7 +39,7 @@ pub async fn download_model(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     model_id: String,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let data_dir = state.data_dir.clone();
 
     // Search both whisper and pyannote model lists
@@ -52,7 +53,7 @@ pub async fn download_model(
         let path = stt_models::pyannote_model_path(&data_dir, &m.filename);
         (m.clone(), path)
     } else {
-        return Err(format!("Unknown model ID: {model_id}"));
+        return Err(AppError::SttProvider(format!("Unknown model ID: {model_id}")));
     };
 
     if dest_path.exists() {
@@ -73,14 +74,14 @@ pub async fn download_model(
         );
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| AppError::SttProvider(e.to_string()))?;
 
     // After downloading, reinitialize the STT provider so it picks up new models.
     // Load the full AppConfig so local/remote mode + remote host/port/key all flow through.
     let config = {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
+        let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
         let mut cfg = medical_db::settings::SettingsRepo::load_config(&conn)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::Database(e.to_string()))?;
         cfg.migrate();
         cfg
     };
@@ -98,7 +99,7 @@ pub async fn download_model(
 pub async fn delete_model(
     state: tauri::State<'_, AppState>,
     model_id: String,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let data_dir = state.data_dir.clone();
 
     // Search both whisper and pyannote model lists
@@ -110,12 +111,12 @@ pub async fn delete_model(
     } else if let Some(m) = all_pyannote.iter().find(|m| m.id == model_id) {
         stt_models::pyannote_model_path(&data_dir, &m.filename)
     } else {
-        return Err(format!("Unknown model ID: {model_id}"));
+        return Err(AppError::SttProvider(format!("Unknown model ID: {model_id}")));
     };
 
     stt_models::delete_model(&path)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| AppError::SttProvider(e.to_string()))?;
 
     Ok(())
 }

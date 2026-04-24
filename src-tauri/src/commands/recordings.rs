@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::types::recording::{ProcessingStatus, Recording, RecordingSummary};
 use medical_db::recordings::RecordingsRepo;
 use medical_db::search::SearchRepo;
@@ -14,20 +15,21 @@ pub fn list_recordings(
     state: tauri::State<'_, AppState>,
     limit: Option<u32>,
     offset: Option<u32>,
-) -> Result<Vec<RecordingSummary>, String> {
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
+) -> AppResult<Vec<RecordingSummary>> {
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
     RecordingsRepo::list_all(&conn, limit.unwrap_or(50), offset.unwrap_or(0))
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 #[tauri::command]
 pub fn get_recording(
     state: tauri::State<'_, AppState>,
     id: String,
-) -> Result<Recording, String> {
-    let uuid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
-    RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())
+) -> AppResult<Recording> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|e| AppError::Other(format!("invalid recording id: {e}")))?;
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+    RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| AppError::Database(e.to_string()))
 }
 
 #[tauri::command]
@@ -35,19 +37,20 @@ pub fn search_recordings(
     state: tauri::State<'_, AppState>,
     query: String,
     limit: Option<u32>,
-) -> Result<Vec<Recording>, String> {
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
+) -> AppResult<Vec<Recording>> {
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
     SearchRepo::search_recordings(&conn, &query, limit.unwrap_or(20))
-        .map_err(|e| e.to_string())
+        .map_err(|e| AppError::Database(e.to_string()))
 }
 
 #[tauri::command]
 pub fn delete_recording(
     state: tauri::State<'_, AppState>,
     id: String,
-) -> Result<(), String> {
-    let uuid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let mut conn = state.db.conn().map_err(|e| e.to_string())?;
+) -> AppResult<()> {
+    let uuid = Uuid::parse_str(&id)
+        .map_err(|e| AppError::Other(format!("invalid recording id: {e}")))?;
+    let mut conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
 
     // Get the recording first so we can clean up the WAV file
     let recording = RecordingsRepo::get_by_id(&conn, &uuid).ok();
@@ -55,14 +58,17 @@ pub fn delete_recording(
     // Delete the vectors and the recording row atomically: if either fails,
     // rolling back leaves the user in a consistent "still present" state they
     // can retry, rather than orphaned vectors pointing at a deleted recording.
-    let tx = conn.transaction().map_err(|e| format!("begin tx: {e}"))?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| AppError::Database(format!("begin tx: {e}")))?;
     if let Err(e) = VectorsRepo::delete_by_document(&tx, &id) {
         // Not fatal on its own (recording may have no RAG chunks), but log
         // rather than silently discard so we don't hide a real DB error.
         tracing::warn!(recording_id = %id, error = %e, "vector delete failed, continuing");
     }
-    RecordingsRepo::delete(&tx, &uuid).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| format!("commit tx: {e}"))?;
+    RecordingsRepo::delete(&tx, &uuid).map_err(|e| AppError::Database(e.to_string()))?;
+    tx.commit()
+        .map_err(|e| AppError::Database(format!("commit tx: {e}")))?;
 
     // Delete the WAV file from disk only after the DB commit succeeds —
     // removing the file first and failing the DB delete would leave a row
@@ -81,14 +87,14 @@ pub fn delete_recording(
 #[tauri::command]
 pub fn delete_all_recordings(
     state: tauri::State<'_, AppState>,
-) -> Result<u32, String> {
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
+) -> AppResult<u32> {
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
 
     // Delete all RAG vectors
     let _ = conn.execute("DELETE FROM vectors", []);
 
     // Delete all recordings and get audio paths for file cleanup
-    let paths = RecordingsRepo::delete_all(&conn).map_err(|e| e.to_string())?;
+    let paths = RecordingsRepo::delete_all(&conn).map_err(|e| AppError::Database(e.to_string()))?;
     let count = paths.len() as u32;
 
     // Remove audio files from disk
@@ -110,10 +116,10 @@ pub fn delete_all_recordings(
 pub fn import_audio_file(
     state: tauri::State<'_, AppState>,
     file_path: String,
-) -> Result<String, String> {
+) -> AppResult<String> {
     let source = PathBuf::from(&file_path);
     if !source.exists() {
-        return Err(format!("File not found: {file_path}"));
+        return Err(AppError::Other(format!("File not found: {file_path}")));
     }
 
     // Resolve recordings directory from settings (custom path or default).
@@ -133,14 +139,14 @@ pub fn import_audio_file(
         let dest_filename = format!("{original_name}_{short_id}.wav");
         let dest = recordings_dir.join(&dest_filename);
         std::fs::copy(&source, &dest)
-            .map_err(|e| format!("Failed to copy file: {e}"))?;
+            .map_err(|e| AppError::Audio(format!("Failed to copy file: {e}")))?;
         dest
     } else {
         // Non-WAV — convert to WAV.
         let dest_filename = format!("{original_name}_{short_id}.wav");
         let dest = recordings_dir.join(&dest_filename);
         medical_audio::convert::convert_to_wav(&source, &dest)
-            .map_err(|e| format!("Failed to convert audio: {e}"))?;
+            .map_err(|e| AppError::Audio(format!("Failed to convert audio: {e}")))?;
         dest
     };
 
@@ -170,8 +176,8 @@ pub fn import_audio_file(
     recording.file_size_bytes = file_size;
     recording.status = ProcessingStatus::Pending;
 
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
-    RecordingsRepo::insert(&conn, &recording).map_err(|e| e.to_string())?;
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+    RecordingsRepo::insert(&conn, &recording).map_err(|e| AppError::Database(e.to_string()))?;
 
     Ok(recording_id.to_string())
 }

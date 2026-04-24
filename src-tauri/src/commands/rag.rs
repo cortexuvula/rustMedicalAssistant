@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::types::rag::RagResult;
 use medical_db::recordings::RecordingsRepo;
 use medical_db::vectors::VectorsRepo;
@@ -31,26 +32,27 @@ pub struct RagStats {
 pub async fn ingest_document(
     state: tauri::State<'_, AppState>,
     recording_id: String,
-) -> Result<IngestResult, String> {
-    let uuid = Uuid::parse_str(&recording_id).map_err(|e| format!("Invalid UUID: {e}"))?;
+) -> AppResult<IngestResult> {
+    let uuid = Uuid::parse_str(&recording_id)
+        .map_err(|e| AppError::Other(format!("invalid recording id: {e}")))?;
 
     // Load the recording from the database on a blocking thread.
     let db = Arc::clone(&state.db);
     let recording = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     // Extract transcript text
     let transcript = recording
         .transcript
         .as_deref()
-        .ok_or_else(|| "Recording has no transcript to ingest".to_string())?;
+        .ok_or_else(|| AppError::Rag("Recording has no transcript to ingest".to_string()))?;
 
     if transcript.trim().is_empty() {
-        return Err("Recording transcript is empty".to_string());
+        return Err(AppError::Rag("Recording transcript is empty".to_string()));
     }
 
     let title = recording
@@ -63,7 +65,7 @@ pub async fn ingest_document(
         .ingestion
         .ingest_text(uuid, title, transcript)
         .await
-        .map_err(|e| format!("Ingestion failed: {e}"))?;
+        .map_err(|e| AppError::Rag(format!("Ingestion failed: {e}")))?;
 
     Ok(IngestResult {
         recording_id,
@@ -80,7 +82,7 @@ pub async fn search_rag(
     state: tauri::State<'_, AppState>,
     query: String,
     top_k: Option<u32>,
-) -> Result<Vec<RagResult>, String> {
+) -> AppResult<Vec<RagResult>> {
     let top_k = top_k.unwrap_or(5) as usize;
     let fetch_k = top_k * 2;
 
@@ -89,27 +91,35 @@ pub async fn search_rag(
         .embedding_generator
         .embed(&query)
         .await
-        .map_err(|e| format!("Embedding failed: {e}"))?;
+        .map_err(|e| AppError::Rag(format!("Embedding failed: {e}")))?;
 
     // 2. Vector + BM25 search on blocking threads (both hit SQLite)
     let vs = Arc::clone(&state.vector_store);
     let embedding_clone = query_embedding.clone();
     let vector_handle = tokio::task::spawn_blocking(move || {
         vs.search(&embedding_clone, fetch_k, 0.3)
-            .map_err(|e| format!("Vector search failed: {e}"))
+            .map_err(|e| AppError::Rag(format!("Vector search failed: {e}")))
     });
 
     let bm25 = Arc::clone(&state.bm25_search);
     let query_clone = query.clone();
     let bm25_handle = tokio::task::spawn_blocking(move || {
         bm25.search(&query_clone, fetch_k)
-            .map_err(|e| format!("BM25 search failed: {e}"))
+            .map_err(|e| AppError::Rag(format!("BM25 search failed: {e}")))
     });
 
     // Await both searches concurrently
     let (vector_results, bm25_results) = tokio::try_join!(
-        async { vector_handle.await.map_err(|e| format!("Task join error: {e}"))? },
-        async { bm25_handle.await.map_err(|e| format!("Task join error: {e}"))? },
+        async {
+            vector_handle
+                .await
+                .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
+        },
+        async {
+            bm25_handle
+                .await
+                .map_err(|e| AppError::Other(format!("Task join error: {e}")))?
+        },
     )?;
 
     // 4. Fuse with RRF
@@ -123,10 +133,10 @@ pub async fn search_rag(
 
 /// Return statistics about the RAG knowledge base.
 #[tauri::command]
-pub fn rag_stats(state: tauri::State<'_, AppState>) -> Result<RagStats, String> {
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
+pub fn rag_stats(state: tauri::State<'_, AppState>) -> AppResult<RagStats> {
+    let conn = state.db.conn().map_err(|e| AppError::Database(e.to_string()))?;
 
-    let chunk_count = VectorsRepo::count(&conn).map_err(|e| e.to_string())?;
+    let chunk_count = VectorsRepo::count(&conn).map_err(|e| AppError::Database(e.to_string()))?;
 
     // Count graph entities via a direct query (GraphSearch doesn't expose count)
     let entity_count: u32 = conn

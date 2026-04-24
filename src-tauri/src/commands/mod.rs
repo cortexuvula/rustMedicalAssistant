@@ -15,13 +15,14 @@ pub mod vocabulary;
 
 use std::path::PathBuf;
 
+use medical_core::error::{AppError, AppResult};
 use medical_db::Database;
 
 /// Resolve the recordings directory from settings.
 ///
 /// If the user has configured a custom `storage_path`, use it.
 /// Otherwise fall back to `{data_dir}/recordings`.
-pub fn resolve_recordings_dir(db: &Database, data_dir: &PathBuf) -> Result<PathBuf, String> {
+pub fn resolve_recordings_dir(db: &Database, data_dir: &PathBuf) -> AppResult<PathBuf> {
     let dir = if let Ok(conn) = db.conn() {
         medical_db::settings::SettingsRepo::load_config(&conn)
             .ok()
@@ -32,6 +33,30 @@ pub fn resolve_recordings_dir(db: &Database, data_dir: &PathBuf) -> Result<PathB
     } else {
         data_dir.join("recordings")
     };
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create recordings dir: {e}"))?;
+    std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// Extract the inner payload from an `AppError`, avoiding thiserror's
+/// category-prefix (e.g., `"Processing error: "`). Used when re-wrapping
+/// an existing `AppError` so we don't double-prefix the stored/emitted message.
+pub(super) fn unwrap_app_error_message(err: AppError) -> String {
+    match err {
+        AppError::Database(s)
+        | AppError::Security(s)
+        | AppError::Audio(s)
+        | AppError::AiProvider(s)
+        | AppError::SttProvider(s)
+        | AppError::TtsProvider(s)
+        | AppError::Agent(s)
+        | AppError::Rag(s)
+        | AppError::Processing(s)
+        | AppError::Export(s)
+        | AppError::Translation(s)
+        | AppError::Config(s)
+        | AppError::Other(s) => s,
+        AppError::Io(e) => e.to_string(),
+        AppError::Serialization(e) => e.to_string(),
+        AppError::Cancelled => "Cancelled".to_string(),
+    }
 }

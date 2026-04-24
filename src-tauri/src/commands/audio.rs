@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use medical_audio::capture::CaptureConfig;
 use medical_audio::device::{get_input_device, list_input_devices, AudioDevice};
+use medical_core::error::{AppError, AppResult};
 use medical_core::types::recording::{ProcessingStatus, Recording};
 use medical_db::recordings::RecordingsRepo;
 
@@ -19,8 +20,8 @@ use super::resolve_recordings_dir;
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
-    list_input_devices().map_err(|e| e.to_string())
+pub fn list_audio_devices() -> AppResult<Vec<AudioDevice>> {
+    list_input_devices().map_err(|e| AppError::Audio(e.to_string()))
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ pub fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
 pub async fn start_recording(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     info!("Starting audio recording");
 
     // Atomically check-and-set recording flag to prevent concurrent recordings.
@@ -40,7 +41,9 @@ pub async fn start_recording(
         let mut active = state.recording_active.lock().await;
         if *active {
             warn!("Attempted to start recording while another is in progress");
-            return Err("A recording is already in progress".into());
+            return Err(AppError::Audio(
+                "A recording is already in progress".to_string(),
+            ));
         }
         *active = true;
     }
@@ -70,11 +73,14 @@ pub async fn start_recording(
 
     // Read the configured input device and sample rate from settings.
     let (input_device_name, sample_rate) = try_or_reset!(state, {
-        let conn = state.db.conn().map_err(|e| e.to_string())?;
+        let conn = state
+            .db
+            .conn()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         let mut config = medical_db::settings::SettingsRepo::load_config(&conn)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| AppError::Database(e.to_string()))?;
         config.migrate();
-        Ok::<_, String>((
+        Ok::<_, AppError>((
             config.input_device.filter(|s| !s.is_empty()),
             config.sample_rate,
         ))
@@ -90,20 +96,20 @@ pub async fn start_recording(
     // back through a oneshot channel.
     let wav_path_clone = wav_path.clone();
     let (tx, rx) = std::sync::mpsc::channel::<
-        Result<(SendCaptureHandle, std::sync::mpsc::Receiver<Vec<f32>>), String>,
+        Result<(SendCaptureHandle, std::sync::mpsc::Receiver<Vec<f32>>), AppError>,
     >();
 
     std::thread::spawn(move || {
         let result = (|| {
             let device = get_input_device(input_device_name.as_deref())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| AppError::Audio(e.to_string()))?;
             let config = CaptureConfig {
                 sample_rate,
                 ..CaptureConfig::default()
             };
             let (handle, waveform_rx) =
                 medical_audio::capture::start_capture(&device, config, &wav_path_clone)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| AppError::Audio(e.to_string()))?;
             Ok((SendCaptureHandle(Some(handle)), waveform_rx))
         })();
         let _ = tx.send(result);
@@ -112,7 +118,7 @@ pub async fn start_recording(
     let (send_handle, waveform_rx) = try_or_reset!(
         state,
         rx.recv()
-            .map_err(|_| "Audio capture thread panicked".to_string())
+            .map_err(|_| AppError::Audio("Audio capture thread panicked".to_string()))
             .and_then(|r| r)
     );
 
@@ -169,7 +175,7 @@ pub async fn start_recording(
 #[instrument(skip(state), name = "audio::stop_recording")]
 pub async fn stop_recording(
     state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     // Take the CaptureHandle out of AppState as a SendCaptureHandle (which is
     // Send+Sync).  We must NOT hold a bare CaptureHandle across an .await
     // because CaptureHandle is !Send.
@@ -186,14 +192,16 @@ pub async fn stop_recording(
             let mut active = state.recording_active.lock().await;
             *active = false;
         }
-        return Err("No active recording to stop".into());
+        return Err(AppError::Audio(
+            "No active recording to stop".to_string(),
+        ));
     }
 
     // Drop the wrapper on a blocking worker so CaptureHandle::drop (which
     // joins the drain thread) doesn't block the async runtime.
     tokio::task::spawn_blocking(move || drop(wrapper))
         .await
-        .map_err(|e| format!("Stop task panicked: {e}"))?;
+        .map_err(|e| AppError::Other(format!("Stop task panicked: {e}")))?;
 
     // Set recording inactive.
     {
@@ -207,7 +215,8 @@ pub async fn stop_recording(
         rec_lock.take()
     };
 
-    let current = current.ok_or("No current recording info found")?;
+    let current = current
+        .ok_or_else(|| AppError::Audio("No current recording info found".to_string()))?;
 
     // Compute duration from elapsed time.
     let duration_secs = current.started_at.elapsed().as_secs_f64();
@@ -224,7 +233,8 @@ pub async fn stop_recording(
         tracing::warn!(path = %current.wav_path.display(), "WAV file is empty — audio may not have been captured");
     }
 
-    let recording_uuid = Uuid::parse_str(&current.id).map_err(|e| e.to_string())?;
+    let recording_uuid = Uuid::parse_str(&current.id)
+        .map_err(|e| AppError::Other(format!("invalid recording id: {e}")))?;
 
     // Build the Recording struct.
     let filename = current
@@ -241,8 +251,11 @@ pub async fn stop_recording(
     recording.status = ProcessingStatus::Pending;
 
     // Insert into DB.
-    let conn = state.db.conn().map_err(|e| e.to_string())?;
-    RecordingsRepo::insert(&conn, &recording).map_err(|e| e.to_string())?;
+    let conn = state
+        .db
+        .conn()
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    RecordingsRepo::insert(&conn, &recording).map_err(|e| AppError::Database(e.to_string()))?;
 
     info!(
         recording_id = %current.id,
@@ -263,7 +276,7 @@ pub async fn stop_recording(
 #[tauri::command]
 pub async fn cancel_recording(
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     // Take the CaptureHandle out of AppState.
     let wrapper = {
         let mut handle_lock = state.capture_handle.lock().unwrap();
@@ -283,14 +296,16 @@ pub async fn cancel_recording(
             let mut rec_lock = state.current_recording.lock().unwrap();
             *rec_lock = None;
         }
-        return Err("No active recording to cancel".into());
+        return Err(AppError::Audio(
+            "No active recording to cancel".to_string(),
+        ));
     }
 
     // Drop the capture handle on a blocking worker so its drop (which joins
     // the drain thread) doesn't stall the async runtime.
     tokio::task::spawn_blocking(move || drop(wrapper))
         .await
-        .map_err(|e| format!("Cancel task panicked: {e}"))?;
+        .map_err(|e| AppError::Other(format!("Cancel task panicked: {e}")))?;
 
     // Set recording inactive.
     {
@@ -318,14 +333,16 @@ pub async fn cancel_recording(
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn pause_recording(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub fn pause_recording(state: tauri::State<'_, AppState>) -> AppResult<()> {
     let handle_lock = state.capture_handle.lock().unwrap();
     match &handle_lock.0 {
         Some(handle) => {
             handle.pause();
             Ok(())
         }
-        None => Err("No active recording to pause".into()),
+        None => Err(AppError::Audio(
+            "No active recording to pause".to_string(),
+        )),
     }
 }
 
@@ -334,14 +351,16 @@ pub fn pause_recording(state: tauri::State<'_, AppState>) -> Result<(), String> 
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn resume_recording(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub fn resume_recording(state: tauri::State<'_, AppState>) -> AppResult<()> {
     let handle_lock = state.capture_handle.lock().unwrap();
     match &handle_lock.0 {
         Some(handle) => {
             handle.resume();
             Ok(())
         }
-        None => Err("No active recording to resume".into()),
+        None => Err(AppError::Audio(
+            "No active recording to resume".to_string(),
+        )),
     }
 }
 
@@ -361,7 +380,7 @@ pub struct RecordingStateSnapshot {
 #[tauri::command]
 pub async fn get_recording_state(
     state: tauri::State<'_, AppState>,
-) -> Result<RecordingStateSnapshot, String> {
+) -> AppResult<RecordingStateSnapshot> {
     let active = *state.recording_active.lock().await;
     let current = {
         let guard = state.current_recording.lock().unwrap();
@@ -399,21 +418,22 @@ pub struct RecordingAudioLevels {
 pub async fn check_recording_audio_levels(
     state: tauri::State<'_, AppState>,
     recording_id: String,
-) -> Result<RecordingAudioLevels, String> {
-    let uuid = Uuid::parse_str(&recording_id).map_err(|e| format!("Invalid recording id: {e}"))?;
+) -> AppResult<RecordingAudioLevels> {
+    let uuid = Uuid::parse_str(&recording_id)
+        .map_err(|e| AppError::Other(format!("invalid recording id: {e}")))?;
 
     let db = Arc::clone(&state.db);
     let recording = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     let wav_path = recording.audio_path.clone();
     let levels = tokio::task::spawn_blocking(move || compute_audio_levels(&wav_path))
         .await
-        .map_err(|e| format!("Task join error: {e}"))??;
+        .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     if levels.is_silent {
         warn!(
@@ -426,9 +446,9 @@ pub async fn check_recording_audio_levels(
     Ok(levels)
 }
 
-fn compute_audio_levels(path: &std::path::Path) -> Result<RecordingAudioLevels, String> {
-    let reader =
-        hound::WavReader::open(path).map_err(|e| format!("Failed to open WAV: {e}"))?;
+fn compute_audio_levels(path: &std::path::Path) -> AppResult<RecordingAudioLevels> {
+    let reader = hound::WavReader::open(path)
+        .map_err(|e| AppError::Processing(format!("Failed to open WAV: {e}")))?;
     let spec = reader.spec();
 
     let (peak, sum_sq, count) = match spec.sample_format {
@@ -437,7 +457,8 @@ fn compute_audio_levels(path: &std::path::Path) -> Result<RecordingAudioLevels, 
             let mut sum_sq = 0.0f64;
             let mut count: u64 = 0;
             for sample in reader.into_samples::<f32>() {
-                let s = sample.map_err(|e| format!("Corrupt WAV sample: {e}"))?;
+                let s = sample
+                    .map_err(|e| AppError::Processing(format!("Corrupt WAV sample: {e}")))?;
                 let abs = s.abs();
                 if abs > peak {
                     peak = abs;
@@ -453,7 +474,8 @@ fn compute_audio_levels(path: &std::path::Path) -> Result<RecordingAudioLevels, 
             let mut sum_sq = 0.0f64;
             let mut count: u64 = 0;
             for sample in reader.into_samples::<i32>() {
-                let raw = sample.map_err(|e| format!("Corrupt WAV sample: {e}"))?;
+                let raw = sample
+                    .map_err(|e| AppError::Processing(format!("Corrupt WAV sample: {e}")))?;
                 let s = raw as f32 / max_val;
                 let abs = s.abs();
                 if abs > peak {
