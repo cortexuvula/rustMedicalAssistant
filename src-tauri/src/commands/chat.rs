@@ -189,18 +189,23 @@ pub async fn chat_stream(
         .map_err(|e| AppError::AiProvider(format!("Failed to start streaming: {}", super::unwrap_app_error_message(e))))?;
 
     // Consume the stream in a background task so the command returns immediately.
-    tokio::spawn(async move {
+    // The worker returns AppResult<()> so the supervisor below can emit a
+    // terminal `chat-error` event if it exits via an error path OR panics —
+    // without a supervisor, a panicking JoinHandle would leave the UI spinner
+    // spinning forever.
+    let worker_app = app.clone();
+    let worker = tokio::spawn(async move {
         while let Some(result) = stream.next().await {
             match result {
                 Ok(chunk) => match chunk {
                     StreamChunk::Delta { text } => {
-                        let _ = app.emit("chat-token", TokenPayload { content: text });
+                        let _ = worker_app.emit("chat-token", TokenPayload { content: text });
                     }
                     StreamChunk::ToolCallDelta { .. } => {
                         // Tool-call deltas are not surfaced in the basic chat stream.
                     }
                     StreamChunk::Usage(usage) => {
-                        let _ = app.emit(
+                        let _ = worker_app.emit(
                             "chat-done",
                             DonePayload {
                                 usage: Some(usage),
@@ -209,7 +214,7 @@ pub async fn chat_stream(
                         );
                     }
                     StreamChunk::Done => {
-                        let _ = app.emit(
+                        let _ = worker_app.emit(
                             "chat-done",
                             DonePayload {
                                 usage: None,
@@ -219,15 +224,40 @@ pub async fn chat_stream(
                     }
                 },
                 Err(e) => {
-                    error!("chat_stream error: {e}");
-                    let _ = app.emit(
-                        "chat-error",
-                        ErrorPayload {
-                            message: e.to_string(),
-                        },
-                    );
-                    break;
+                    let msg = super::unwrap_app_error_message_ref(&e);
+                    error!("chat_stream error: {msg}");
+                    return Err(e);
                 }
+            }
+        }
+        Ok::<(), AppError>(())
+    });
+
+    // Supervisor: ensures the UI always sees a terminal event even if the
+    // worker task panics, is cancelled, or returns an error. The worker emits
+    // `chat-done` itself on clean completion; we only emit `chat-error` here.
+    let supervisor_app = app.clone();
+    tokio::spawn(async move {
+        match worker.await {
+            Ok(Ok(())) => {
+                // Normal completion — worker already emitted `chat-done`.
+            }
+            Ok(Err(e)) => {
+                let _ = supervisor_app.emit(
+                    "chat-error",
+                    ErrorPayload {
+                        message: super::unwrap_app_error_message(e),
+                    },
+                );
+            }
+            Err(join_err) => {
+                let msg = if join_err.is_panic() {
+                    format!("Chat stream panicked: {join_err}")
+                } else {
+                    format!("Chat stream cancelled: {join_err}")
+                };
+                error!("chat_stream supervisor: {msg}");
+                let _ = supervisor_app.emit("chat-error", ErrorPayload { message: msg });
             }
         }
     });
