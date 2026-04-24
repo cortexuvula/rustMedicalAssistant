@@ -52,16 +52,19 @@ struct ErrorPayload {
 // ---------------------------------------------------------------------------
 
 /// Load the AI model and temperature from saved settings.
-/// Falls back to sensible defaults if settings can't be read.
-fn load_chat_settings(state: &tauri::State<'_, AppState>) -> (String, f32) {
-    let conn = state.db.conn().ok();
-    let config = conn
-        .and_then(|c| medical_db::settings::SettingsRepo::load_config(&c).ok())
-        .map(|mut c| { c.migrate(); c });
-    match config {
-        Some(cfg) => (cfg.ai_model, cfg.temperature),
-        None => ("gpt-4o".to_string(), 0.7),
-    }
+///
+/// Returns a hard error if the settings can't be read — a silent fallback to a
+/// hardcoded model (previously `"gpt-4o"`) would route requests to the wrong
+/// provider for any user configured for Anthropic/Ollama/etc.
+fn load_chat_settings(state: &tauri::State<'_, AppState>) -> AppResult<(String, f32)> {
+    let conn = state
+        .db
+        .conn()
+        .map_err(|e| AppError::Config(format!("Failed to load chat settings: {e}")))?;
+    let mut cfg = medical_db::settings::SettingsRepo::load_config(&conn)
+        .map_err(|e| AppError::Config(format!("Failed to load chat settings: {e}")))?;
+    cfg.migrate();
+    Ok((cfg.ai_model, cfg.temperature))
 }
 
 /// Convert a frontend role string to the core `Role` enum.
@@ -117,7 +120,7 @@ pub async fn chat_send(
     system_prompt: Option<String>,
 ) -> AppResult<String> {
     // Load model/temperature from settings when not explicitly provided
-    let (settings_model, settings_temp) = load_chat_settings(&state);
+    let (settings_model, settings_temp) = load_chat_settings(&state)?;
 
     let provider = {
         let registry = state.ai_providers.lock().await;
@@ -160,7 +163,7 @@ pub async fn chat_stream(
     system_prompt: Option<String>,
 ) -> AppResult<()> {
     // Load model/temperature from settings when not explicitly provided
-    let (settings_model, settings_temp) = load_chat_settings(&state);
+    let (settings_model, settings_temp) = load_chat_settings(&state)?;
 
     let provider = {
         let registry = state.ai_providers.lock().await;
@@ -268,7 +271,7 @@ pub async fn chat_with_agent(
 
     let cancel = CancellationToken::new();
 
-    let (model, _temperature) = load_chat_settings(&state);
+    let (model, _temperature) = load_chat_settings(&state)?;
 
     debug!(
         "chat_with_agent: running agent '{}' with model '{}'",
