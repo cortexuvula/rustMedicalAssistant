@@ -87,7 +87,8 @@ pub async fn process_recording(
         None,       // language — use default
         Some(true), // diarize — medical encounters are multi-speaker
     )
-    .await;
+    .await
+    .map_err(|e| e.to_string());
 
     if let Err(ref e) = transcript_result {
         error!(error = %e, "Pipeline failed at transcription stage");

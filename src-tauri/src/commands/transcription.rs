@@ -5,6 +5,7 @@ use tauri::Emitter;
 use tracing::{info, instrument};
 use uuid::Uuid;
 
+use medical_core::error::{AppError, AppResult};
 use medical_core::types::recording::ProcessingStatus;
 use medical_core::types::stt::{AudioData, SttConfig};
 use medical_db::recordings::RecordingsRepo;
@@ -43,9 +44,9 @@ fn is_repeated_phrase_hallucination(text: &str) -> bool {
 }
 
 /// Load a WAV file from disk and convert it into `AudioData` (f32 PCM).
-fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
-    let reader =
-        hound::WavReader::open(path).map_err(|e| format!("Failed to open WAV: {e}"))?;
+fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, AppError> {
+    let reader = hound::WavReader::open(path)
+        .map_err(|e| AppError::Processing(format!("Failed to open WAV: {e}")))?;
     let spec = reader.spec();
 
     let samples: Vec<f32> = match spec.sample_format {
@@ -53,14 +54,14 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, String> {
             reader
                 .into_samples::<f32>()
                 .collect::<Result<Vec<f32>, _>>()
-                .map_err(|e| format!("Corrupt WAV sample data: {e}"))?
+                .map_err(|e| AppError::Processing(format!("Corrupt WAV sample data: {e}")))?
         }
         hound::SampleFormat::Int => {
             let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .into_samples::<i32>()
                 .collect::<Result<Vec<i32>, _>>()
-                .map_err(|e| format!("Corrupt WAV sample data: {e}"))?
+                .map_err(|e| AppError::Processing(format!("Corrupt WAV sample data: {e}")))?
                 .into_iter()
                 .map(|s| s as f32 / max_val)
                 .collect()
@@ -128,7 +129,7 @@ pub async fn transcribe_recording(
     recording_id: String,
     language: Option<String>,
     diarize: Option<bool>,
-) -> Result<String, String> {
+) -> AppResult<String> {
     info!(
         language = language.as_deref().unwrap_or("auto"),
         diarize = diarize.unwrap_or(true),
@@ -139,29 +140,33 @@ pub async fn transcribe_recording(
     let _ = app.emit("transcription-progress", "loading");
 
     // Parse the recording ID.
-    let uuid = Uuid::parse_str(&recording_id).map_err(|e| e.to_string())?;
+    let uuid = Uuid::parse_str(&recording_id)
+        .map_err(|e| AppError::Other(format!("invalid recording id: {e}")))?;
 
     // Load the recording and mark as Processing — on a blocking thread.
     let db = Arc::clone(&state.db);
     let recording = tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        let mut recording =
-            RecordingsRepo::get_by_id(&conn, &uuid).map_err(|e| e.to_string())?;
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        let mut recording = RecordingsRepo::get_by_id(&conn, &uuid)
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
         recording.status = ProcessingStatus::Processing {
             started_at: Utc::now(),
         };
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())?;
-        Ok::<_, String>(recording)
+        RecordingsRepo::update(&conn, &recording)
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok::<_, AppError>(recording)
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     let wav_path = recording.audio_path.clone();
 
     if !wav_path.exists() {
         let err_msg = format!("WAV file not found: {}", wav_path.display());
-        return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+        return Err(AppError::Processing(
+            mark_recording_failed(&app, &state.db, recording, err_msg).await,
+        ));
     }
 
     // Load and decode the WAV file on a blocking thread (CPU-intensive for large files).
@@ -171,11 +176,15 @@ pub async fn transcribe_recording(
     {
         Ok(Ok(audio)) => audio,
         Ok(Err(e)) => {
-            return Err(mark_recording_failed(&app, &state.db, recording, e).await);
+            return Err(AppError::Processing(
+                mark_recording_failed(&app, &state.db, recording, e.to_string()).await,
+            ));
         }
         Err(e) => {
             let err_msg = format!("Task join error: {e}");
-            return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+            return Err(AppError::Other(
+                mark_recording_failed(&app, &state.db, recording, err_msg).await,
+            ));
         }
     };
 
@@ -213,7 +222,9 @@ pub async fn transcribe_recording(
     if audio.samples.is_empty() {
         let err_msg = format!("WAV file contains no audio samples: {}", wav_path.display());
         tracing::error!("{err_msg}");
-        return Err(mark_recording_failed(&app, &state.db, recording.clone(), err_msg).await);
+        return Err(AppError::Processing(
+            mark_recording_failed(&app, &state.db, recording.clone(), err_msg).await,
+        ));
     }
 
     // Build STT config from caller parameters.
@@ -234,7 +245,9 @@ pub async fn transcribe_recording(
             None => {
                 let err_msg = "No STT provider configured. Download a Whisper model in Settings → Audio / STT.".to_string();
                 tracing::error!("{err_msg}");
-                return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+                return Err(AppError::SttProvider(
+                    mark_recording_failed(&app, &state.db, recording, err_msg).await,
+                ));
             }
         }
     };
@@ -243,7 +256,9 @@ pub async fn transcribe_recording(
         Err(e) => {
             let err_msg = format!("Transcription failed: {e}");
             tracing::error!(error = %e, "STT transcription failed");
-            return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+            return Err(AppError::Processing(
+                mark_recording_failed(&app, &state.db, recording, err_msg).await,
+            ));
         }
     };
 
@@ -270,7 +285,9 @@ pub async fn transcribe_recording(
             text_preview = %transcript.text.chars().take(80).collect::<String>(),
             "Rejecting likely Whisper hallucination from silent source"
         );
-        return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+        return Err(AppError::Processing(
+            mark_recording_failed(&app, &state.db, recording, err_msg).await,
+        ));
     }
 
     // Guard: if transcription produced no text, mark as Failed rather than
@@ -282,19 +299,24 @@ pub async fn transcribe_recording(
             segments = transcript.segments.len(),
             "{err_msg}"
         );
-        return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+        return Err(AppError::Processing(
+            mark_recording_failed(&app, &state.db, recording, err_msg).await,
+        ));
     }
 
     // Apply vocabulary corrections if enabled
     let db_vocab = Arc::clone(&state.db);
     let display_text = match tokio::task::spawn_blocking(move || {
-        let conn = db_vocab.conn().map_err(|e| e.to_string())?;
+        let conn = db_vocab
+            .conn()
+            .map_err(|e| AppError::Database(e.to_string()))?;
         let config = SettingsRepo::load_config(&conn)
             .ok()
             .map(|mut c| { c.migrate(); c });
         let vocab_enabled = config.map(|c| c.vocabulary_enabled).unwrap_or(true);
         if vocab_enabled {
-            let entries = VocabularyRepo::list_enabled(&conn).map_err(|e| e.to_string())?;
+            let entries = VocabularyRepo::list_enabled(&conn)
+                .map_err(|e| AppError::Database(e.to_string()))?;
             if !entries.is_empty() {
                 let result = vocabulary_corrector::apply_corrections(&display_text, &entries);
                 if result.total_replacements > 0 {
@@ -303,7 +325,7 @@ pub async fn transcribe_recording(
                         "Applied vocabulary corrections to transcript"
                     );
                 }
-                return Ok::<String, String>(result.corrected_text);
+                return Ok::<String, AppError>(result.corrected_text);
             }
         }
         Ok(display_text)
@@ -312,11 +334,15 @@ pub async fn transcribe_recording(
     {
         Ok(Ok(text)) => text,
         Ok(Err(e)) => {
-            return Err(mark_recording_failed(&app, &state.db, recording, e).await);
+            return Err(AppError::Processing(
+                mark_recording_failed(&app, &state.db, recording, e.to_string()).await,
+            ));
         }
         Err(e) => {
             let err_msg = format!("Task join error: {e}");
-            return Err(mark_recording_failed(&app, &state.db, recording, err_msg).await);
+            return Err(AppError::Other(
+                mark_recording_failed(&app, &state.db, recording, err_msg).await,
+            ));
         }
     };
 
@@ -329,11 +355,12 @@ pub async fn transcribe_recording(
         completed_at: Utc::now(),
     };
     tokio::task::spawn_blocking(move || {
-        let conn = db.conn().map_err(|e| e.to_string())?;
-        RecordingsRepo::update(&conn, &recording).map_err(|e| e.to_string())
+        let conn = db.conn().map_err(|e| AppError::Database(e.to_string()))?;
+        RecordingsRepo::update(&conn, &recording)
+            .map_err(|e| AppError::Database(e.to_string()))
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))??;
+    .map_err(|e| AppError::Other(format!("Task join error: {e}")))??;
 
     // --- emit: complete ---
     let _ = app.emit("transcription-progress", "complete");
@@ -409,7 +436,7 @@ fn format_transcript_with_speakers(transcript: &medical_core::types::stt::Transc
 #[tauri::command]
 pub async fn list_stt_providers(
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<(String, bool)>, String> {
+) -> AppResult<Vec<(String, bool)>> {
     let guard = state.stt_providers.lock().await;
     match guard.as_ref() {
         Some(provider) => Ok(vec![(provider.name().to_string(), true)]),
