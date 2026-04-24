@@ -267,11 +267,16 @@ pub async fn chat_with_agent(
 
     let cancel = CancellationToken::new();
 
-    debug!("chat_with_agent: running agent '{}'", agent_name);
+    let (model, _temperature) = load_chat_settings(&state);
+
+    debug!(
+        "chat_with_agent: running agent '{}' with model '{}'",
+        agent_name, model
+    );
 
     let response = state
         .orchestrator
-        .execute(agent.as_ref(), context, provider.as_ref(), cancel)
+        .execute(agent.as_ref(), context, provider.as_ref(), &model, cancel)
         .await
         .map_err(|e| format!("Agent execution failed: {e}"))?;
 

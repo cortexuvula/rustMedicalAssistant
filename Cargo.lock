@@ -3324,6 +3324,7 @@ name = "medical-agents"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-core",
  "medical-core",
  "medical-rag",
  "regex",

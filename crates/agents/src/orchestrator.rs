@@ -35,11 +35,15 @@ impl AgentOrchestrator {
     /// 1. Call provider with tool definitions
     /// 2. If the provider requests tool calls, execute them and append results
     /// 3. If no tool calls remain, return the final response
+    ///
+    /// `model` is the model identifier to pass into every `CompletionRequest`.
+    /// Callers should source this from user settings for the active provider.
     pub async fn execute(
         &self,
         agent: &dyn Agent,
         context: AgentContext,
         provider: &dyn AiProvider,
+        model: &str,
         cancel: CancellationToken,
     ) -> AppResult<AgentResponse> {
         // Get only the tools that are both requested by the agent and present in the registry
@@ -56,9 +60,6 @@ impl AgentOrchestrator {
         let mut tool_calls_made: Vec<AgentToolCallRecord> = Vec::new();
         let mut total_usage = UsageInfo::default();
         let mut iterations: u32 = 0;
-
-        // Determine base model — we use a reasonable default; callers can override via provider
-        let model = "gpt-4o".to_string();
 
         loop {
             // Check for cancellation at the top of each iteration
@@ -81,7 +82,7 @@ impl AgentOrchestrator {
             iterations += 1;
 
             let request = CompletionRequest {
-                model: model.clone(),
+                model: model.to_string(),
                 messages: messages.clone(),
                 temperature: Some(0.2),
                 max_tokens: Some(4096),
@@ -312,5 +313,90 @@ mod tests {
         } else {
             panic!("Expected text content");
         }
+    }
+
+    use async_trait::async_trait;
+    use futures_core::Stream;
+    use medical_core::error::AppResult;
+    use medical_core::traits::AiProvider;
+    use medical_core::types::{
+        CompletionRequest, CompletionResponse, ModelInfo, StreamChunk, ToolCompletionResponse,
+        ToolDef, UsageInfo,
+    };
+    use std::sync::Mutex;
+
+    /// Test double that records every model name it sees.
+    struct ModelCapturingProvider {
+        captured_models: Mutex<Vec<String>>,
+    }
+
+    impl ModelCapturingProvider {
+        fn new() -> Self {
+            Self { captured_models: Mutex::new(Vec::new()) }
+        }
+    }
+
+    #[async_trait]
+    impl AiProvider for ModelCapturingProvider {
+        fn name(&self) -> &str { "capturing" }
+        async fn available_models(&self) -> AppResult<Vec<ModelInfo>> { Ok(vec![]) }
+        async fn complete(&self, _req: CompletionRequest) -> AppResult<CompletionResponse> {
+            unreachable!("orchestrator uses complete_with_tools")
+        }
+        async fn complete_stream(
+            &self,
+            _req: CompletionRequest,
+        ) -> AppResult<Box<dyn Stream<Item = AppResult<StreamChunk>> + Send + Unpin>> {
+            unreachable!()
+        }
+        async fn complete_with_tools(
+            &self,
+            request: CompletionRequest,
+            _tools: Vec<ToolDef>,
+        ) -> AppResult<ToolCompletionResponse> {
+            self.captured_models.lock().unwrap().push(request.model.clone());
+            Ok(ToolCompletionResponse {
+                content: Some("done".into()),
+                tool_calls: vec![],
+                usage: UsageInfo::default(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_forwards_caller_supplied_model() {
+        use crate::agents::ChatAgent;
+        use medical_core::types::AgentContext;
+        use tokio_util::sync::CancellationToken;
+
+        let registry = ToolRegistry::default();
+        let orchestrator = AgentOrchestrator::new(registry);
+        let provider = ModelCapturingProvider::new();
+        let agent = ChatAgent;
+        let context = AgentContext {
+            user_message: "hi".into(),
+            conversation_history: vec![],
+            patient_context: None,
+            rag_context: vec![],
+            recording: None,
+        };
+
+        let _ = orchestrator
+            .execute(
+                &agent,
+                context,
+                &provider,
+                "claude-sonnet-4-6",
+                CancellationToken::new(),
+            )
+            .await
+            .expect("run");
+
+        let captured = provider.captured_models.lock().unwrap();
+        assert_eq!(
+            captured.as_slice(),
+            &["claude-sonnet-4-6".to_string()],
+            "orchestrator must pass the caller-supplied model, not a hardcoded default"
+        );
     }
 }
