@@ -97,22 +97,28 @@ impl Tool for RagSearchTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as usize;
 
-        // If RAG is not configured, return an informational stub
-        if !self.is_configured() {
-            let content = serde_json::to_string_pretty(&json!({
-                "query": query,
-                "top_k": top_k,
-                "results": [],
-                "note": "Knowledge base search is not yet connected. Results will be available once the RAG system is initialized."
-            }))
-            .unwrap_or_else(|_| "serialization error".into());
+        // If RAG is not configured, return an informational stub.
+        // Use an if-let guard (rather than is_configured() + unwrap) so the
+        // check and the borrow happen atomically — eliminates any theoretical
+        // panic risk from concurrent reconfiguration and keeps unwraps off the
+        // agent hot path.
+        let (embeddings, vector_store, bm25) =
+            match (&self.embeddings, &self.vector_store, &self.bm25) {
+                (Some(embeddings), Some(vector_store), Some(bm25)) => {
+                    (embeddings, vector_store, bm25)
+                }
+                _ => {
+                    let content = serde_json::to_string_pretty(&json!({
+                        "query": query,
+                        "top_k": top_k,
+                        "results": [],
+                        "note": "Knowledge base search is not yet connected. Results will be available once the RAG system is initialized."
+                    }))
+                    .unwrap_or_else(|_| "serialization error".into());
 
-            return Ok(ToolOutput::success(content));
-        }
-
-        let embeddings = self.embeddings.as_ref().unwrap();
-        let vector_store = self.vector_store.as_ref().unwrap();
-        let bm25 = self.bm25.as_ref().unwrap();
+                    return Ok(ToolOutput::success(content));
+                }
+            };
 
         // 1. Embed the query
         let query_embedding = embeddings.embed(query).await?;
