@@ -19,6 +19,9 @@ use std::path::Path;
 use thiserror::Error;
 
 pub use pool::{DbPool, PooledConnection};
+/// Re-export rusqlite's Connection so downstream crates can reference the
+/// type (e.g. for helper signatures) without taking a direct dep on rusqlite.
+pub use rusqlite::Connection;
 
 #[derive(Error, Debug)]
 pub enum DbError {

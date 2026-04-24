@@ -61,11 +61,7 @@ pub fn delete_recording(
     let tx = conn
         .transaction()
         .map_err(|e| AppError::Database(format!("begin tx: {e}")))?;
-    if let Err(e) = VectorsRepo::delete_by_document(&tx, &id) {
-        // Not fatal on its own (recording may have no RAG chunks), but log
-        // rather than silently discard so we don't hide a real DB error.
-        tracing::warn!(recording_id = %id, error = %e, "vector delete failed, continuing");
-    }
+    delete_rag_vectors_best_effort(&tx, &id);
     RecordingsRepo::delete(&tx, &uuid).map_err(|e| AppError::Database(e.to_string()))?;
     tx.commit()
         .map_err(|e| AppError::Database(format!("commit tx: {e}")))?;
@@ -82,6 +78,24 @@ pub fn delete_recording(
     }
 
     Ok(())
+}
+
+/// Delete RAG vectors for a recording, logging failures rather than aborting
+/// the recording deletion. Intentional: users expect recording delete to
+/// succeed even if the vector index is temporarily unreachable or the chunks
+/// were never persisted in the first place. Orphaned vectors are a known
+/// tradeoff — a follow-up background task should eventually sweep them.
+///
+/// Uses `tracing::error!` (not `warn!`) so orphans are visible in operations
+/// dashboards even when warn is filtered out.
+fn delete_rag_vectors_best_effort(conn: &medical_db::Connection, recording_id: &str) {
+    if let Err(e) = VectorsRepo::delete_by_document(conn, recording_id) {
+        tracing::error!(
+            recording_id = %recording_id,
+            error = %e,
+            "Failed to delete RAG vectors during recording delete; vectors may be orphaned until a future cleanup pass"
+        );
+    }
 }
 
 #[tauri::command]
