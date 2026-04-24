@@ -140,7 +140,7 @@ pub async fn chat_send(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {}", super::unwrap_app_error_message(e))))?;
 
     Ok(response.content)
 }
@@ -183,7 +183,7 @@ pub async fn chat_stream(
     let mut stream = provider
         .complete_stream(request)
         .await
-        .map_err(|e| AppError::AiProvider(format!("Failed to start streaming: {e}")))?;
+        .map_err(|e| AppError::AiProvider(format!("Failed to start streaming: {}", super::unwrap_app_error_message(e))))?;
 
     // Consume the stream in a background task so the command returns immediately.
     tokio::spawn(async move {
@@ -279,7 +279,7 @@ pub async fn chat_with_agent(
         .orchestrator
         .execute(agent.as_ref(), context, provider.as_ref(), &model, cancel)
         .await
-        .map_err(|e| AppError::Agent(format!("Agent execution failed: {e}")))?;
+        .map_err(|e| AppError::Agent(format!("Agent execution failed: {}", super::unwrap_app_error_message(e))))?;
 
     Ok(serde_json::to_value(&response)?)
 }
@@ -319,8 +319,5 @@ pub async fn list_models(
     };
     let provider = provider
         .ok_or_else(|| AppError::AiProvider("Provider not found or not configured".to_string()))?;
-    provider
-        .available_models()
-        .await
-        .map_err(|e| AppError::AiProvider(e.to_string()))
+    provider.available_models().await
 }

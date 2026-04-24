@@ -210,7 +210,7 @@ pub async fn generate_soap(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "soap".into(),
-                    status: format!("failed: {err}"),
+                    status: format!("failed: {}", super::unwrap_app_error_message_ref(err)),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -278,7 +278,7 @@ async fn generate_soap_inner(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {}", super::unwrap_app_error_message(e))))?;
 
     let raw_soap = response.content;
     if raw_soap.is_empty() {
@@ -366,7 +366,7 @@ pub async fn generate_referral(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "referral".into(),
-                    status: format!("failed: {err}"),
+                    status: format!("failed: {}", super::unwrap_app_error_message_ref(err)),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -421,7 +421,7 @@ async fn generate_referral_inner(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {}", super::unwrap_app_error_message(e))))?;
 
     let referral_text = response.content;
     if referral_text.is_empty() {
@@ -475,7 +475,7 @@ pub async fn generate_letter(
                 "generation-progress",
                 GenerationProgress {
                     doc_type: "letter".into(),
-                    status: format!("failed: {err}"),
+                    status: format!("failed: {}", super::unwrap_app_error_message_ref(err)),
                     recording_id: recording_id.clone(),
                 },
             );
@@ -527,7 +527,7 @@ async fn generate_letter_inner(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {}", super::unwrap_app_error_message(e))))?;
 
     let letter_text = response.content;
     if letter_text.is_empty() {
@@ -585,7 +585,7 @@ pub async fn generate_synopsis(
     let response = provider
         .complete(request)
         .await
-        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {e}")))?;
+        .map_err(|e| AppError::AiProvider(format!("AI completion failed: {}", super::unwrap_app_error_message(e))))?;
 
     let synopsis_text = response.content;
     if synopsis_text.is_empty() {

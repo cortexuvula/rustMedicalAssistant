@@ -65,7 +65,7 @@ pub async fn ingest_document(
         .ingestion
         .ingest_text(uuid, title, transcript)
         .await
-        .map_err(|e| AppError::Rag(format!("Ingestion failed: {e}")))?;
+        .map_err(|e| AppError::Rag(format!("Ingestion failed: {}", super::unwrap_app_error_message(e))))?;
 
     Ok(IngestResult {
         recording_id,
@@ -91,7 +91,7 @@ pub async fn search_rag(
         .embedding_generator
         .embed(&query)
         .await
-        .map_err(|e| AppError::Rag(format!("Embedding failed: {e}")))?;
+        .map_err(|e| AppError::Rag(format!("Embedding failed: {}", super::unwrap_app_error_message(e))))?;
 
     // 2. Vector + BM25 search on blocking threads (both hit SQLite)
     let vs = Arc::clone(&state.vector_store);
