@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { processRecording, cancelPipeline } from '../api/pipeline';
 import { recordings } from './recordings';
 import { log } from '../api/logging';
+import { formatError } from '../types/errors';
 
 export type PipelineStage = 'idle' | 'transcribing' | 'generating_soap' | 'completed' | 'failed';
 
@@ -109,13 +110,14 @@ function createPipelineStore() {
 
       // Fire and forget — progress comes via events
       processRecording(recordingId, context, template).catch((err) => {
-        log.error('Pipeline command failed', { recordingId, error: String(err) });
+        const message = formatError(err);
+        log.error('Pipeline command failed', { recordingId, error: message });
         update((s) => {
           const prior = s.active[recordingId];
           const errorEntry: PipelineEntry = {
             recordingId,
             stage: 'failed',
-            error: String(err),
+            error: message,
             startedAt: prior?.startedAt ?? startedAt,
             finishedAt: Date.now(),
           };
@@ -144,7 +146,7 @@ function createPipelineStore() {
         const ok = await cancelPipeline(recordingId);
         log.info('Pipeline cancel requested', { recordingId, found: ok });
       } catch (err) {
-        log.error('Pipeline cancel failed', { recordingId, error: String(err) });
+        log.error('Pipeline cancel failed', { recordingId, error: formatError(err) });
       }
     },
 

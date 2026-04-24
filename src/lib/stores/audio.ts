@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import * as audioApi from '../api/audio';
 import { log } from '../api/logging';
+import { formatError } from '../types/errors';
 
 export type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
@@ -75,14 +76,15 @@ function createAudioStore() {
         }));
         startTimer();
       } catch (e: any) {
-        log.error('Failed to start recording', { error: String(e), device: device ?? 'default' });
+        const message = formatError(e);
+        log.error('Failed to start recording', { error: message, device: device ?? 'default' });
         if (waveformUnlisten) {
           waveformUnlisten();
           waveformUnlisten = null;
         }
         update((s) => ({
           ...s,
-          error: e?.toString() || 'Failed to start recording',
+          error: message || 'Failed to start recording',
         }));
       } finally {
         busy = false;
@@ -97,7 +99,7 @@ function createAudioStore() {
       } catch (e: any) {
         update((s) => ({
           ...s,
-          error: e?.toString() || 'Failed to pause',
+          error: formatError(e) || 'Failed to pause',
         }));
       }
     },
@@ -110,7 +112,7 @@ function createAudioStore() {
       } catch (e: any) {
         update((s) => ({
           ...s,
-          error: e?.toString() || 'Failed to resume',
+          error: formatError(e) || 'Failed to resume',
         }));
       }
     },
@@ -135,7 +137,8 @@ function createAudioStore() {
           lastRecordingId: recordingId,
         }));
       } catch (e: any) {
-        log.error('Failed to stop recording', { error: String(e) });
+        const message = formatError(e);
+        log.error('Failed to stop recording', { error: message });
         if (waveformUnlisten) {
           waveformUnlisten();
           waveformUnlisten = null;
@@ -143,7 +146,7 @@ function createAudioStore() {
         // Don't change state to 'stopped' on error — backend may still be recording
         update((s) => ({
           ...s,
-          error: e?.toString() || 'Failed to stop recording',
+          error: message || 'Failed to stop recording',
         }));
         if (wasRecording) startTimer(); // Only restore timer if we were actively recording
       } finally {
@@ -215,7 +218,7 @@ function createAudioStore() {
           elapsedSecs: initialElapsed,
         });
       } catch (e: any) {
-        log.warn('Could not query recording state on startup', { error: String(e) });
+        log.warn('Could not query recording state on startup', { error: formatError(e) });
       }
     },
   };

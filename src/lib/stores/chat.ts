@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import * as chatApi from '../api/chat';
 import type { ChatMessage, ToolCallRecord } from '../types';
+import { formatError } from '../types/errors';
 
 function generateId(): string {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -123,7 +124,7 @@ function createChatStore() {
 
       await chatApi.chatStream(apiMessages);
     } catch (e: any) {
-      appendToLast(`\n\nError: ${e?.toString() || 'Chat failed'}`);
+      appendToLast(`\n\nError: ${formatError(e) || 'Chat failed'}`);
       cleanup();
     }
   }
