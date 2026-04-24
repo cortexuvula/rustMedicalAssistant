@@ -52,6 +52,55 @@ pub enum AppError {
     Other(String),
 }
 
+impl AppError {
+    /// Stable machine-readable discriminant for this error. Matches the variant name.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            AppError::Database(_) => "Database",
+            AppError::Security(_) => "Security",
+            AppError::Audio(_) => "Audio",
+            AppError::AiProvider(_) => "AiProvider",
+            AppError::SttProvider(_) => "SttProvider",
+            AppError::TtsProvider(_) => "TtsProvider",
+            AppError::Agent(_) => "Agent",
+            AppError::Rag(_) => "Rag",
+            AppError::Processing(_) => "Processing",
+            AppError::Export(_) => "Export",
+            AppError::Translation(_) => "Translation",
+            AppError::Config(_) => "Config",
+            AppError::Io(_) => "Io",
+            AppError::Serialization(_) => "Serialization",
+            AppError::Cancelled => "Cancelled",
+            AppError::Other(_) => "Other",
+        }
+    }
+}
+
+impl serde::Serialize for AppError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AppError", 2)?;
+        s.serialize_field("kind", self.kind_str())?;
+        s.serialize_field("message", &self.to_string())?;
+        s.end()
+    }
+}
+
+impl From<String> for AppError {
+    fn from(s: String) -> Self {
+        AppError::Other(s)
+    }
+}
+
+impl From<&str> for AppError {
+    fn from(s: &str) -> Self {
+        AppError::Other(s.to_string())
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;
 
 /// Severity level for error logging and UI display
@@ -132,5 +181,32 @@ mod tests {
         assert_eq!(json["operation"], "test_op");
         assert_eq!(json["error"], "test_err");
         assert!(json["timestamp"].is_string());
+    }
+
+    #[test]
+    fn app_error_serializes_with_kind_and_message() {
+        let err = AppError::AiProvider("bad API key".into());
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "AiProvider");
+        assert_eq!(json["message"], "AI provider error: bad API key");
+    }
+
+    #[test]
+    fn app_error_io_serializes_with_io_kind() {
+        let err: AppError = std::io::Error::new(std::io::ErrorKind::NotFound, "x").into();
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "Io");
+        assert!(
+            json["message"].as_str().unwrap().contains("x"),
+            "message must contain the underlying error text"
+        );
+    }
+
+    #[test]
+    fn app_error_cancelled_serializes() {
+        let err = AppError::Cancelled;
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "Cancelled");
+        assert_eq!(json["message"], "Cancelled");
     }
 }
