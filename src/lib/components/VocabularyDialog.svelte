@@ -10,6 +10,7 @@
     type CorrectionResult,
   } from '../api/vocabulary';
   import { toasts } from '../stores/toasts';
+  import { formatError } from '../types/errors';
 
   interface Props {
     open: boolean;
@@ -134,7 +135,7 @@
       closeForm();
       await loadEntries();
     } catch (err: any) {
-      formError = err?.toString() || 'Failed to save entry.';
+      formError = formatError(err) || 'Failed to save entry.';
     }
   }
 
@@ -186,7 +187,7 @@
       testResult = await testVocabularyCorrection(testInput);
     } catch (err) {
       console.error('Test failed:', err);
-      testError = err?.toString() || 'Test failed.';
+      testError = formatError(err) || 'Test failed.';
     } finally {
       testing = false;
     }

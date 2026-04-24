@@ -14,6 +14,7 @@
   import { contextTemplates } from '../stores/contextTemplates';
   import { toasts } from '../stores/toasts';
   import { rsvp } from '../stores/rsvp';
+  import { formatError } from '../types/errors';
 
   // Context panel state
   let contextText = $state('');
@@ -74,7 +75,7 @@
       await contextTemplates.load();
       closeSaveModal();
     } catch (err: any) {
-      saveModalError = err?.toString() || 'Failed to save template.';
+      saveModalError = formatError(err) || 'Failed to save template.';
     }
   }
 
@@ -242,7 +243,7 @@
         maybeLaunchPipeline(recordingId);
       }
     } catch (e: any) {
-      importError = e?.toString() || 'Import failed';
+      importError = formatError(e) || 'Import failed';
     } finally {
       importing = false;
     }

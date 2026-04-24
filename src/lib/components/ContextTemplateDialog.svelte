@@ -6,6 +6,7 @@
     type ContextTemplate,
   } from '../api/contextTemplates';
   import { contextTemplates } from '../stores/contextTemplates';
+  import { formatError } from '../types/errors';
 
   interface Props {
     open: boolean;
@@ -84,7 +85,7 @@
       closeForm();
       await loadTemplates();
     } catch (err: any) {
-      formError = err?.toString() || 'Failed to save template.';
+      formError = formatError(err) || 'Failed to save template.';
     }
   }
 

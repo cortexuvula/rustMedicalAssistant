@@ -6,6 +6,7 @@
   import GenerateItem from '../components/GenerateItem.svelte';
   import { rsvp } from '../stores/rsvp';
   import type { DocKind } from '../stores/rsvp';
+  import { formatError } from '../types/errors';
 
   let copyStatus = $state<Record<string, 'idle' | 'copying' | 'copied'>>({});
   let contextText = $state('');
@@ -96,7 +97,7 @@
       ]);
       generation.finish();
     } catch (e: any) {
-      generation.setError(e?.toString() || `Failed to generate ${type}`);
+      generation.setError(formatError(e) || `Failed to generate ${type}`);
     }
   }
 </script>

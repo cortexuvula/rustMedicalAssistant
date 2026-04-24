@@ -27,6 +27,7 @@
   import { contextTemplates } from '../stores/contextTemplates';
   import { getDefaultPrompt, type DocType } from '../api/prompts';
   import { toasts } from '../stores/toasts';
+  import { formatError } from '../types/errors';
 
   type Section = 'general' | 'prompts' | 'models' | 'audio';
   let activeSection = $state<Section>('general');
@@ -400,7 +401,7 @@
       lmstudioTestMessage = msg;
     } catch (err: any) {
       lmstudioTestStatus = 'error';
-      lmstudioTestMessage = err?.toString() || 'Connection failed';
+      lmstudioTestMessage = formatError(err) || 'Connection failed';
     }
   }
 
@@ -875,7 +876,7 @@
                 ollamaTestMessage = msg;
               } catch (err: any) {
                 ollamaTestStatus = 'error';
-                ollamaTestMessage = err?.toString() || 'Connection failed';
+                ollamaTestMessage = formatError(err) || 'Connection failed';
               }
             }}
           >
@@ -1101,7 +1102,7 @@
                   sttRemoteTestMessage = msg;
                 } catch (err: any) {
                   sttRemoteTestStatus = 'error';
-                  sttRemoteTestMessage = err?.toString() || 'Connection failed';
+                  sttRemoteTestMessage = formatError(err) || 'Connection failed';
                 }
               }}
             >{sttRemoteTestStatus === 'testing' ? 'Testing…' : 'Test Connection'}</button>

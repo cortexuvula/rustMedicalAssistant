@@ -27,9 +27,15 @@ export type TauriError = {
  */
 export function formatError(err: unknown): string {
   if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
   if (err && typeof err === "object") {
     const e = err as Partial<TauriError> & { message?: unknown };
     if (typeof e.message === "string") return e.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      // fall through to String() below (e.g. circular refs)
+    }
   }
   return String(err);
 }
