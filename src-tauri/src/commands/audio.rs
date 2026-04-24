@@ -451,6 +451,24 @@ fn compute_audio_levels(path: &std::path::Path) -> AppResult<RecordingAudioLevel
         .map_err(|e| AppError::Processing(format!("Failed to open WAV: {e}")))?;
     let spec = reader.spec();
 
+    // Guard against malformed WAVs where bits_per_sample is 0. Without this
+    // check, `1u64 << (spec.bits_per_sample - 1)` underflows to `1 << u32::MAX`
+    // for the int branch, which is an undefined shift and yields garbage peak
+    // and rms values. Return zeroed levels with a warning instead.
+    if spec.bits_per_sample == 0 {
+        tracing::warn!(
+            path = %path.display(),
+            sample_rate = spec.sample_rate,
+            channels = spec.channels,
+            "WAV header reports bits_per_sample=0; returning zeroed levels instead of computing bogus values"
+        );
+        return Ok(RecordingAudioLevels {
+            peak: 0.0,
+            rms: 0.0,
+            is_silent: true,
+        });
+    }
+
     let (peak, sum_sq, count) = match spec.sample_format {
         hound::SampleFormat::Float => {
             let mut peak = 0.0f32;
