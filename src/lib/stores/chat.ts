@@ -107,8 +107,8 @@ function createChatStore() {
       doneUnlisten = await listen('chat-done', () => {
         cleanup();
       });
-      errorUnlisten = await listen<string>('chat-error', (event) => {
-        appendToLast(`\n\nError: ${event.payload}`);
+      errorUnlisten = await listen<{ message: string } | string>('chat-error', (event) => {
+        appendToLast(`\n\nError: ${formatError(event.payload)}`);
         cleanup();
       });
 
