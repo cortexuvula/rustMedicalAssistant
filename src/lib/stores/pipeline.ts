@@ -32,6 +32,38 @@ function createPipelineStore() {
 
   let progressUnlisten: UnlistenFn | null = null;
 
+  // Track pending 30s cleanup timers per recording-id so we can cancel them
+  // if the pipeline is re-launched or removed before the timer fires. Without
+  // this, a stale timer from a prior run could clobber a freshly launched
+  // entry for the same recording id.
+  const pendingCleanups = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function scheduleCleanup(recordingId: string, delayMs: number) {
+    // Cancel any existing cleanup for this recording before scheduling a new one.
+    const existing = pendingCleanups.get(recordingId);
+    if (existing) clearTimeout(existing);
+
+    // Capture the id by value via the function parameter (which is a fresh
+    // binding on each call), so the closure can't see a reassigned outer var.
+    const id = recordingId;
+    const handle = setTimeout(() => {
+      pendingCleanups.delete(id);
+      update((s) => {
+        // Only remove if the entry is still in a terminal state — a
+        // re-launched pipeline for the same recording ID should not be
+        // cleaned up by a stale timer from the previous run.
+        const existingEntry = s.active[id];
+        if (!existingEntry || existingEntry.stage === 'completed' || existingEntry.stage === 'failed') {
+          const { [id]: _, ...rest } = s.active;
+          return { ...s, active: rest };
+        }
+        return s;
+      });
+    }, delayMs);
+
+    pendingCleanups.set(id, handle);
+  }
+
   return {
     subscribe,
 
@@ -72,19 +104,7 @@ function createPipelineStore() {
               log.info('Pipeline completed', { recording_id });
             }
             recordings.load(); // Refresh recordings list
-            setTimeout(() => {
-              update((s) => {
-                // Only remove if the entry is still in a terminal state — a
-                // re-launched pipeline for the same recording ID should not be
-                // cleaned up by a stale timer from the previous run.
-                const existing = s.active[recording_id];
-                if (!existing || existing.stage === 'completed' || existing.stage === 'failed') {
-                  const { [recording_id]: _, ...rest } = s.active;
-                  return { ...s, active: rest };
-                }
-                return s;
-              });
-            }, 30000);
+            scheduleCleanup(recording_id, 30000);
           }
         },
       );
@@ -92,6 +112,15 @@ function createPipelineStore() {
 
     /** Launch the pipeline for a recording. Non-blocking — returns immediately. */
     launch(recordingId: string, context?: string, template?: string) {
+      // If a prior pipeline for this recording id still has a pending cleanup
+      // timer, cancel it — otherwise the stale timer could delete this fresh
+      // entry once it fires.
+      const pending = pendingCleanups.get(recordingId);
+      if (pending) {
+        clearTimeout(pending);
+        pendingCleanups.delete(recordingId);
+      }
+
       const startedAt = Date.now();
       const entry: PipelineEntry = {
         recordingId,
@@ -152,6 +181,12 @@ function createPipelineStore() {
 
     destroy() {
       progressUnlisten?.();
+      // Cancel any outstanding cleanup timers so they don't fire against a
+      // torn-down store.
+      for (const handle of pendingCleanups.values()) {
+        clearTimeout(handle);
+      }
+      pendingCleanups.clear();
     },
   };
 }

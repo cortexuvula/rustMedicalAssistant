@@ -51,6 +51,14 @@ function createSettingsStore() {
   // from being overwritten with incomplete TS defaults.
   let loaded = false;
 
+  // Serialize all saves through a single promise chain. Without this, two
+  // rapid updateField calls could race — if the first save fails and rolls
+  // back after the second save has already flushed its (newer) state, the
+  // local store ends up out of sync with the backend. Chaining guarantees
+  // at most one inflight save, and a failed save re-reads the backend's
+  // latest truth to re-sync.
+  let saveQueue: Promise<void> = Promise.resolve();
+
   return {
     subscribe,
 
@@ -70,12 +78,24 @@ function createSettingsStore() {
         return;
       }
       set(config);
-      try {
-        await saveSettings(config);
-      } catch (err) {
-        console.error('Failed to save settings:', err);
-        throw err;
-      }
+      const prev = saveQueue;
+      saveQueue = (async () => {
+        await prev.catch(() => {}); // tolerate prior failures
+        try {
+          await saveSettings(config);
+        } catch (err) {
+          console.error('Failed to save settings:', err);
+          // Re-sync local state from backend so we don't diverge.
+          try {
+            const latest = await getSettings();
+            set(latest);
+          } catch (_reloadErr) {
+            // If reload also fails, leave local state as-is.
+          }
+          throw err;
+        }
+      })();
+      return saveQueue;
     },
 
     async updateField(key: string, value: any): Promise<void> {
@@ -83,27 +103,35 @@ function createSettingsStore() {
         console.warn('Settings not loaded yet, refusing to save');
         return;
       }
-      // Capture the previous state (for rollback) and the optimistic new state
-      // inside the synchronous update callback, then await the save outside.
-      // Awaiting is what makes `await settings.updateField(...)` followed by
-      // `reinitProviders()` read-after-write safe — without it, the save was
-      // a fire-and-forget background promise and the DB still held the old
-      // value when providers reloaded from it.
-      let captured: { prev: AppConfig; next: AppConfig } | null = null;
+      // Optimistic local update (synchronous).
+      let next: AppConfig | null = null;
       update((current) => {
-        const next: AppConfig = { ...current, [key]: value };
-        captured = { prev: current, next };
+        next = { ...current, [key]: value };
         return next;
       });
-      if (!captured) return; // unreachable: update runs its callback synchronously
-      const { prev, next } = captured as { prev: AppConfig; next: AppConfig };
-      try {
-        await saveSettings(next);
-      } catch (err) {
-        console.error('Save failed:', err);
-        set(prev);
-        throw err;
-      }
+      if (!next) return; // unreachable: update runs its callback synchronously
+      const committed = next as AppConfig;
+
+      // Serialize saves. Each save waits for the previous one before firing,
+      // so failures and successes can't interleave across rapid updates.
+      const prev = saveQueue;
+      saveQueue = (async () => {
+        await prev.catch(() => {}); // tolerate prior failures
+        try {
+          await saveSettings(committed);
+        } catch (err) {
+          console.error('Save failed:', err);
+          // Reload backend's latest truth to keep local state consistent.
+          try {
+            const latest = await getSettings();
+            set(latest);
+          } catch (_reloadErr) {
+            // If reload also fails, leave local state as-is.
+          }
+          throw err;
+        }
+      })();
+      return saveQueue;
     },
   };
 }

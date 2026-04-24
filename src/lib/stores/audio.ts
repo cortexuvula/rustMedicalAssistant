@@ -195,7 +195,13 @@ function createAudioStore() {
         const snap = await audioApi.getRecordingState();
         if (!snap.active || !snap.recording_id) return;
 
-        if (waveformUnlisten) { waveformUnlisten(); waveformUnlisten = null; }
+        // Clean up any prior listener before attaching a new one. Without this,
+        // repeated rehydrate calls (HMR, future reconnect flows) would stack
+        // listeners and produce duplicate waveform updates.
+        if (waveformUnlisten) {
+          waveformUnlisten();
+          waveformUnlisten = null;
+        }
         waveformUnlisten = await listen<number[]>('waveform-data', (event) => {
           update((s) => ({
             ...s,
