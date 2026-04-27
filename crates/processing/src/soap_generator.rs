@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use chrono::Local;
 use medical_core::types::settings::SoapTemplate;
 use regex::Regex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::prompt_resolver::resolve_prompt;
 
@@ -110,6 +110,50 @@ RULES:
 5. Say "the patient" — never use names.
 6. Replace "VML" with "Valley Medical Laboratories."
 
+EXAMPLE — disciplined extraction from a sparse visit:
+
+Transcript:
+"Doctor: What brings you in today?
+Patient: My back has been sore for three days, mostly on the right side. Started after I moved some boxes.
+Doctor: Any leg numbness or weakness?
+Patient: No.
+Doctor: Sounds like a muscle strain from lifting. I'll order an X-ray to be safe, start ibuprofen 400 mg three times a day, and see you back in two weeks if it isn't improving."
+
+Correct extraction (excerpt — full output still requires every standard section):
+
+Subjective:
+- Chief complaint: right-sided back pain for three days
+- History of present illness: pain began after lifting boxes; denies leg numbness or weakness
+- Past medical history: Not discussed
+- Surgical history: Not discussed
+- Current medications: Not discussed
+- Allergies: Not discussed
+- Family history: Not discussed
+- Social history: Not discussed
+- Review of systems: Not performed
+
+Objective:
+- Vital signs: Not recorded
+- General appearance: Not discussed
+- Physical examination: Not discussed
+- Laboratory results: No new labs discussed
+- Imaging: X-ray ordered
+
+Plan:
+- X-ray of the back
+- Ibuprofen 400 mg three times daily
+
+Follow up:
+- Return in two weeks if symptoms do not improve
+
+What this example deliberately does NOT contain — each would be a fabrication:
+- Blood pressure, heart rate, temperature, or any other vital signs (none stated)
+- "Tenderness on palpation", "no spinal deformity", or any exam finding (no exam was performed)
+- "Rule out disc herniation" or any differential diagnosis (none discussed)
+- "Patient appears comfortable" or any general-appearance description (not stated)
+- Specific red-flag warnings such as "seek care for bowel/bladder dysfunction" (not given by physician)
+- Allergy or medication entries beyond what was stated
+
 OUTPUT FORMAT — plain text only, no markdown:
 
 {icd_label}
@@ -158,7 +202,13 @@ FORMATTING RULES:
 - One blank line between sections
 - Assessment is ONE paragraph, not sub-items
 - No decorative characters (no ===, ---, ***, ##)
-- Plain text section headers followed by colon"#
+- Plain text section headers followed by colon
+
+SELF-CHECK BEFORE OUTPUT:
+- For every line you produce, locate the transcript quote that supports it. If you cannot, replace the content with "Not discussed" / "Not performed" / "Not recorded".
+- Vital signs, exam findings, medication dosages, follow-up timing, and red-flag warnings are the most common fabrications. If a number, dose, or interval was not stated in the transcript, do not invent one.
+- Clinical reasoning in the Assessment must reflect what was discussed during the visit. Do not supply rationale the physician did not voice.
+- A short accurate note beats a long partially-fabricated one. Length is not a virtue."#
 }
 
 /// Build the SOAP system prompt: select template (custom or default), then resolve placeholders.
@@ -177,10 +227,13 @@ pub fn build_soap_prompt(config: &SoapPromptConfig) -> String {
 // Pre-processing
 // ---------------------------------------------------------------------------
 
-/// Maximum characters for the transcript before truncation.
-const MAX_PROMPT_LENGTH: usize = 10_000;
-
 /// Maximum characters for the medical context block.
+///
+/// The transcript is intentionally NOT truncated here — the command layer
+/// (`commands/generation.rs`) enforces the authoritative upper bound
+/// (`MAX_TRANSCRIPT_CHARS`). A second, much smaller cap inside `sanitize_prompt`
+/// previously dropped the back half of any real-visit transcript, which the
+/// model then fabricated content for.
 const MAX_CONTEXT_LENGTH: usize = 8_000;
 
 /// Dangerous patterns to strip from user-supplied text before sending to AI.
@@ -206,28 +259,16 @@ static DANGEROUS_PATTERNS: &[&str] = &[
 ];
 
 /// Sanitise user-supplied text by stripping dangerous patterns, null bytes,
-/// and excessive whitespace.  Truncates to `MAX_PROMPT_LENGTH`.
+/// and normalising line endings. Does NOT truncate — callers are responsible
+/// for enforcing length limits at the appropriate layer (transcripts are
+/// bounded at the command layer, context is bounded by `MAX_CONTEXT_LENGTH`
+/// inside `build_user_prompt`).
 pub fn sanitize_prompt(text: &str) -> String {
     if text.is_empty() {
         return String::new();
     }
 
     let mut result = text.to_string();
-
-    // Truncate (find a valid UTF-8 boundary to avoid panicking on multi-byte chars)
-    if result.len() > MAX_PROMPT_LENGTH {
-        warn!(
-            "Prompt truncated from {} to {} characters",
-            result.len(),
-            MAX_PROMPT_LENGTH
-        );
-        let mut end = MAX_PROMPT_LENGTH;
-        while !result.is_char_boundary(end) {
-            end -= 1;
-        }
-        result.truncate(end);
-        result.push_str("...[TRUNCATED]");
-    }
 
     // Strip dangerous patterns
     let mut removed = 0usize;
@@ -255,13 +296,18 @@ pub fn sanitize_prompt(text: &str) -> String {
 
 /// Build the user-turn prompt with datetime, context, and transcript.
 ///
-/// Mirrors the Python `_prepare_soap_generation` pre-processing:
-/// 1. Sanitise transcript and context
-/// 2. Truncate context to MAX_CONTEXT_LENGTH
+/// 1. Sanitise transcript and context (no truncation of transcript here —
+///    the command layer enforces the authoritative upper bound)
+/// 2. Truncate context to `MAX_CONTEXT_LENGTH` if needed
 /// 3. Prepend current date/time
 /// 4. Assemble parts
 pub fn build_user_prompt(transcript: &str, context: Option<&str>) -> String {
     let clean_transcript = sanitize_prompt(transcript);
+    debug!(
+        raw_transcript_len = transcript.len(),
+        clean_transcript_len = clean_transcript.len(),
+        "build_user_prompt: transcript prepared (no truncation applied)"
+    );
 
     // Prepend date/time
     let now = Local::now();
@@ -462,6 +508,65 @@ mod tests {
     }
 
     #[test]
+    fn default_soap_prompt_includes_few_shot_example() {
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        // The example block is named and contains the disciplined-extraction snippet
+        assert!(prompt.contains("EXAMPLE"));
+        assert!(prompt.contains("right-sided back pain for three days"));
+        // It demonstrates the "Not discussed / Not recorded / Not performed" pattern
+        assert!(prompt.contains("Vital signs: Not recorded"));
+        assert!(prompt.contains("Physical examination: Not discussed"));
+        assert!(prompt.contains("Review of systems: Not performed"));
+        // It explicitly calls out what would be fabrications, not just what to include
+        assert!(prompt.contains("would be a fabrication"));
+    }
+
+    #[test]
+    fn default_soap_prompt_includes_self_check_block() {
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        assert!(prompt.contains("SELF-CHECK"));
+        assert!(prompt.contains("locate the transcript quote"));
+        assert!(prompt.contains("do not invent one"));
+    }
+
+    #[test]
+    fn self_check_block_is_at_end_for_recency() {
+        // Recency matters: the model is more likely to follow the self-check
+        // discipline if it appears AFTER the format and formatting-rules sections.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        let pos_self_check = prompt.find("SELF-CHECK").expect("self-check block missing");
+        let pos_format_rules = prompt
+            .find("FORMATTING RULES")
+            .expect("formatting rules section missing");
+        let pos_output_format = prompt
+            .find("OUTPUT FORMAT")
+            .expect("output format section missing");
+        assert!(
+            pos_self_check > pos_format_rules,
+            "SELF-CHECK must come after FORMATTING RULES"
+        );
+        assert!(
+            pos_self_check > pos_output_format,
+            "SELF-CHECK must come after OUTPUT FORMAT"
+        );
+    }
+
+    #[test]
+    fn example_appears_before_output_format() {
+        // The example must precede OUTPUT FORMAT so the model has a concrete
+        // demo of the rules in mind before it sees the section template.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        let pos_example = prompt.find("EXAMPLE").expect("example block missing");
+        let pos_output_format = prompt
+            .find("OUTPUT FORMAT")
+            .expect("output format section missing");
+        assert!(
+            pos_example < pos_output_format,
+            "EXAMPLE must come before OUTPUT FORMAT"
+        );
+    }
+
+    #[test]
     fn default_soap_prompt_resolves_icd9() {
         let config = SoapPromptConfig {
             icd_version: "ICD-9".into(),
@@ -611,11 +716,36 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_truncates_long_input() {
-        let long = "a".repeat(MAX_PROMPT_LENGTH + 500);
+    fn sanitize_does_not_truncate_long_input() {
+        // sanitize_prompt must NOT truncate — that responsibility lives at the
+        // command layer (MAX_TRANSCRIPT_CHARS) and per-caller (MAX_CONTEXT_LENGTH).
+        // A previous 10K cap here silently dropped the back half of real
+        // transcripts, causing the model to fabricate the missing content.
+        let long = "a".repeat(50_000);
         let result = sanitize_prompt(&long);
-        assert!(result.len() <= MAX_PROMPT_LENGTH + 20); // +20 for truncation marker
-        assert!(result.ends_with("[TRUNCATED]"));
+        assert_eq!(result.len(), 50_000);
+        assert!(!result.contains("[TRUNCATED]"));
+    }
+
+    #[test]
+    fn build_user_prompt_preserves_full_transcript() {
+        // Regression: a long transcript (e.g. a 30-minute visit) must flow
+        // through build_user_prompt intact. Previously the transcript was
+        // silently truncated to the first 10K chars, leading the model to
+        // hallucinate the Assessment / Plan / follow-up sections.
+        let middle_marker = "PATIENT_REPORTS_NEW_SYMPTOM_AT_MINUTE_25";
+        let mut transcript = String::with_capacity(40_000);
+        transcript.push_str(&"chief complaint chitchat ".repeat(800)); // ~20K
+        transcript.push_str(middle_marker);
+        transcript.push_str(&" treatment plan discussion ".repeat(800)); // ~20K
+        assert!(transcript.len() > 30_000);
+
+        let prompt = build_user_prompt(&transcript, None);
+        assert!(
+            prompt.contains(middle_marker),
+            "build_user_prompt dropped transcript content past 10K chars"
+        );
+        assert!(!prompt.contains("[TRUNCATED]"));
     }
 
     #[test]
