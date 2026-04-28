@@ -56,12 +56,18 @@ fn soap_placeholders(icd_version: &str, template: &SoapTemplate) -> HashMap<&'st
 
 fn icd_code_parts(version: &str) -> (&'static str, &'static str) {
     match version {
-        "ICD-9" => ("ICD-9 code", "ICD-9 Code: [code]"),
+        "ICD-9" => (
+            "ICD-9 code",
+            "ICD-9 Code: [code if a primary diagnosis was clearly discussed; otherwise \"Not applicable - no diagnosis clearly discussed\"]",
+        ),
         "both" => (
             "both ICD-9 and ICD-10 codes",
-            "ICD-9 Code: [code]\nICD-10 Code: [code]",
+            "ICD-9 Code: [code if a primary diagnosis was clearly discussed; otherwise \"Not applicable - no diagnosis clearly discussed\"]\nICD-10 Code: [code if a primary diagnosis was clearly discussed; otherwise \"Not applicable - no diagnosis clearly discussed\"]",
         ),
-        _ => ("ICD-10 code", "ICD-10 Code: [code]"),
+        _ => (
+            "ICD-10 code",
+            "ICD-10 Code: [code if a primary diagnosis was clearly discussed; otherwise \"Not applicable - no diagnosis clearly discussed\"]",
+        ),
     }
 }
 
@@ -110,7 +116,21 @@ RULES:
 5. Say "the patient" — never use names.
 6. Replace "VML" with "Valley Medical Laboratories."
 
-EXAMPLE — disciplined extraction from a sparse visit:
+FORBIDDEN INFERENCES — DO NOT include any of these unless the transcript explicitly states them. These are the most common fabrication patterns:
+
+- Patient age, sex, gender, race, ethnicity, or occupation. Do not infer demographics from clinical context (e.g., do not write "58-year-old male" because cardiovascular risk was discussed).
+- Past medical conditions. Common comorbidities (hypertension, hyperlipidemia, diabetes, etc.) are NOT defaults — only list conditions named by the patient or physician in the transcript.
+- Current medications and dosages. If the physician says "a supplement" or names a drug without a dose, write the agent only (e.g., "Vitamin B12 supplement, dose not specified") — never pick a canonical dose.
+- Family history items. Do not invent relatives' conditions or ages.
+- Social history specifics. Do not invent diet descriptions, exercise level, tobacco/alcohol status, or living situation. A patient saying "I should start exercising" is NOT a statement that they are currently sedentary — do not characterize their baseline.
+- Visit modality. Do not call the visit "telehealth" or "in-person" unless one was explicitly mentioned.
+- General-appearance descriptions when the physician did not comment on appearance. Do not write "appears well" or "no acute distress" by default.
+- Provider names for referrals. Name the specialty only (e.g., "Referral to cardiology"). Never invent a specific provider's name; if the physician did not name one, do not include one.
+- Follow-up intervals. If no timeframe was stated, write "Follow-up timing not specified" — do not default to "3 months" or any other interval.
+- Red-flag warnings ("seek urgent care for X"). Only include warnings the physician actually voiced. Do not add stock warnings such as "chest pain or shortness of breath."
+- ICD codes when no diagnosis was clearly discussed. If no clear primary diagnosis is stateable from the transcript, write "Not applicable - no diagnosis clearly discussed" instead of guessing a code.
+
+EXAMPLE 1 — disciplined extraction from a sparse injury visit:
 
 Transcript:
 "Doctor: What brings you in today?
@@ -154,6 +174,72 @@ What this example deliberately does NOT contain — each would be a fabrication:
 - Specific red-flag warnings such as "seek care for bowel/bladder dysfunction" (not given by physician)
 - Allergy or medication entries beyond what was stated
 
+EXAMPLE 2 — disciplined extraction from a lab-review visit (NO history, NO exam, NO past-medical-history discussion):
+
+Transcript:
+"Doctor: Hi, I have your labs back. Urine was clear, no growth. Thyroid normal. Lipoprotein little a was elevated, so cardiovascular risk is higher. HDL was good, total cholesterol on the cutoff at 5.2. A1C five-five percent, no diabetes. Sodium and potassium normal. Vitamin B12 was low, 200 to 213, and the cutoff is 220, so you need to take a B12 supplement or a B complex. Blood cells normal, no protein in the urine. We need to be strict on cholesterol and increase cardiovascular activity to reduce risk.
+Patient: That's something I need to start doing, I've been thinking about it.
+Doctor: Okay, all right then.
+Patient: Thanks, have a good day."
+
+Correct extraction:
+
+ICD-10 Code: Not applicable - no diagnosis clearly discussed
+
+Subjective:
+- Chief complaint: Follow-up to review recent lab results
+- History of present illness: The patient is here to review recent lab results
+- Past medical history: Not discussed
+- Surgical history: Not discussed
+- Current medications: Not discussed
+- Allergies: Not discussed
+- Family history: Not discussed
+- Social history: Not discussed
+- Review of systems: Not performed
+
+Objective:
+- Vital signs: Not recorded
+- General appearance: Not discussed
+- Physical examination: Not discussed
+- Laboratory results:
+  - Urine: clear, no growth, no protein
+  - Thyroid function: normal
+  - Lipoprotein(a): elevated
+  - HDL: good
+  - Total cholesterol: 5.2 mmol/L (on cutoff)
+  - A1C: 5.5%
+  - Sodium, potassium: normal
+  - Vitamin B12: low at 200-213 pg/mL (cutoff 220 pg/mL)
+  - Blood cells: normal
+- Imaging: No imaging discussed
+
+Assessment:
+- The patient's recent labs show an elevated Lipoprotein(a), interpreted by the physician as indicating higher cardiovascular risk, and a low Vitamin B12 below the stated cutoff. Other labs are within normal ranges, including A1C with no evidence of diabetes.
+
+Differential Diagnosis:
+- No differential diagnoses were discussed during the visit
+
+Plan:
+- Vitamin B12 supplement or vitamin B complex (dose not specified)
+- Increase cardiovascular activity to reduce cardiovascular risk
+- Maintain strict cholesterol management
+
+Follow up:
+- Follow-up timing not specified
+
+What this lab-review example deliberately does NOT contain — each would be a fabrication:
+- Patient age, sex, or other demographics (none stated)
+- Past medical history items such as hypertension, hyperlipidemia, or diabetes — the physician explicitly said "no diabetes," and nothing else was discussed
+- Current medications such as Lisinopril or Atorvastatin (none stated)
+- Family history of cardiovascular disease (none stated)
+- Social history specifics about diet or exercise — the patient saying "I should start" does NOT establish a sedentary baseline
+- A specific B12 dose ("1000 mcg daily") — the physician said "supplement" without a dose
+- Visit type "telehealth" or "in-person" (not stated)
+- A referral to cardiology, or a named cardiologist — no referral was discussed
+- A specific follow-up interval such as "3 months" (none stated)
+- An ICD code (no clear diagnosis was made — write "Not applicable")
+- Red-flag warnings such as "seek urgent care for chest pain" — the physician did not voice such warnings
+
 OUTPUT FORMAT — plain text only, no markdown:
 
 {icd_label}
@@ -161,40 +247,39 @@ OUTPUT FORMAT — plain text only, no markdown:
 Subjective:
 - Chief complaint: [from transcript]
 - History of present illness: [from transcript]
-- Past medical history: [from transcript or background]
-- Surgical history: [from transcript or "Not discussed"]
+- Past medical history: [from transcript or explicit background; otherwise "Not discussed"]
+- Surgical history: [from transcript; otherwise "Not discussed"]
 - Current medications:
-  - [medication 1]
-  - [medication 2]
-- Allergies: [from transcript or "Not discussed"]
-- Family history: [from transcript or "Not discussed"]
-- Social history: [from transcript or "Not discussed"]
-- Review of systems: [from transcript or "Not performed"]
+  - [each medication on its own line; if none stated, write "Not discussed"]
+- Allergies: [from transcript; otherwise "Not discussed"]
+- Family history: [from transcript; otherwise "Not discussed"]
+- Social history: [from transcript; otherwise "Not discussed"]
+- Review of systems: [from transcript; otherwise "Not performed"]
 
 Objective:
-- [Visit type, e.g., telehealth or in-person]
-- Vital signs: [from transcript or "Not recorded"]
-- General appearance: [from transcript]
-- Physical examination: [from transcript or "limited due to telehealth format"]
-- Laboratory results: [from transcript or "No new labs discussed"]
-- Imaging: [from transcript or "No imaging discussed"]
+- [Visit type, ONLY if explicitly stated; otherwise omit this line entirely]
+- Vital signs: [from transcript; otherwise "Not recorded"]
+- General appearance: [from transcript; otherwise "Not discussed" — do NOT default to "appears well"]
+- Physical examination: [from transcript; otherwise "Not discussed"]
+- Laboratory results: [from transcript; otherwise "No new labs discussed"]
+- Imaging: [from transcript; otherwise "No imaging discussed"]
 
 Assessment:
-- [ONE cohesive paragraph summarizing diagnoses, clinical status, and reasoning. Include {icd_instruction} inline. Not broken into sub-items.]
+- [ONE cohesive paragraph using ONLY findings and reasoning that appear in the transcript. Include {icd_instruction} inline if a primary diagnosis was clearly discussed; otherwise omit the code. Do NOT restate past medical history, medications, family history, or social history in the Assessment unless the physician explicitly tied them to today's reasoning. If the visit is purely a lab review with no clinical examination, the Assessment should describe the lab findings and the physician's stated interpretation — nothing more. Not broken into sub-items.]
 
 Differential Diagnosis:
 - [Only diagnoses explicitly discussed during the visit. If none discussed: "- No differential diagnoses were discussed during the visit"]
 
 Plan:
-- [Each intervention as a separate dash line]
+- [Each intervention as a separate dash line — ONLY interventions discussed by the physician]
 
 Follow up:
-- [Follow-up timeline and instructions]
-- [Seek urgent care for: specific red flags from transcript]
-- [Return sooner if: conditions from transcript]
+- [Follow-up timeline if stated by the physician; otherwise "Follow-up timing not specified"]
+- [Seek urgent care for: specific red flags from transcript ONLY — omit this line if no red flags were voiced]
+- [Return sooner if: conditions from transcript ONLY — omit this line if no such conditions were voiced]
 
 Clinical Synopsis:
-- [One-paragraph summary of visit. Output this exactly once, at the very end.]
+- [One-paragraph summary of visit. Use ONLY content already present in the Subjective/Objective/Assessment/Plan sections above — do not introduce new details. Output this exactly once, at the very end.]
 
 FORMATTING RULES:
 - Every content line starts with dash (-)
@@ -204,11 +289,19 @@ FORMATTING RULES:
 - No decorative characters (no ===, ---, ***, ##)
 - Plain text section headers followed by colon
 
-SELF-CHECK BEFORE OUTPUT:
-- For every line you produce, locate the transcript quote that supports it. If you cannot, replace the content with "Not discussed" / "Not performed" / "Not recorded".
-- Vital signs, exam findings, medication dosages, follow-up timing, and red-flag warnings are the most common fabrications. If a number, dose, or interval was not stated in the transcript, do not invent one.
-- Clinical reasoning in the Assessment must reflect what was discussed during the visit. Do not supply rationale the physician did not voice.
-- A short accurate note beats a long partially-fabricated one. Length is not a virtue."#
+SELF-CHECK BEFORE OUTPUT — for every line you produced, locate the transcript quote that supports it. If you cannot, replace the content with "Not discussed" / "Not performed" / "Not recorded" / "Not specified" or remove the line. Then run this category checklist:
+
+1. Demographics check: any line stating age, sex, gender, race, or occupation must have a transcript quote. If absent, remove the detail.
+2. Past medical history check: every PMH item must have a transcript quote (or be drawn from explicitly provided background context). If neither, write "Not discussed."
+3. Medication check: drug name, dose, frequency, and route — every element must be stated in the transcript. If only the drug was named, write the drug name with "dose not specified." Do not invent a canonical dose.
+4. Referral check: any specific provider name must have a transcript quote. If only the specialty was discussed, name the specialty only. If no referral was discussed, do not include a referral line.
+5. Follow-up interval check: any duration ("in 3 months", "in 2 weeks") must have a transcript quote. If absent, write "Follow-up timing not specified."
+6. Red-flag check: any "seek urgent care for X" warning must have a transcript quote. If absent, remove the line.
+7. ICD code check: only include a code if a clear primary diagnosis was discussed. If not, write "Not applicable - no diagnosis clearly discussed."
+8. Visit modality check: only call the visit "telehealth" or "in-person" if explicitly stated.
+9. Assessment check: does the Assessment paragraph mention PMH, medications, family history, or social history that the physician did not tie to today's reasoning? If so, remove those mentions.
+
+Vital signs, exam findings, medication dosages, follow-up timing, and red-flag warnings are the most common fabrications. If a number, dose, or interval was not stated in the transcript, do not invent one. Clinical reasoning in the Assessment must reflect what was discussed during the visit. A short accurate note beats a long partially-fabricated one. Length is not a virtue."#
 }
 
 /// Build the SOAP system prompt: select template (custom or default), then resolve placeholders.
@@ -573,7 +666,8 @@ mod tests {
             ..Default::default()
         };
         let prompt = build_soap_prompt(&config);
-        assert!(prompt.contains("ICD-9 Code: [code]"));
+        assert!(prompt.contains("ICD-9 Code: [code"));
+        assert!(prompt.contains("Not applicable - no diagnosis clearly discussed"));
         assert!(!prompt.contains("{icd_label}"));
         assert!(!prompt.contains("{icd_instruction}"));
     }
@@ -585,7 +679,8 @@ mod tests {
             ..Default::default()
         };
         let prompt = build_soap_prompt(&config);
-        assert!(prompt.contains("ICD-10 Code: [code]"));
+        assert!(prompt.contains("ICD-10 Code: [code"));
+        assert!(prompt.contains("Not applicable - no diagnosis clearly discussed"));
     }
 
     #[test]
@@ -595,8 +690,77 @@ mod tests {
             ..Default::default()
         };
         let prompt = build_soap_prompt(&config);
-        assert!(prompt.contains("ICD-9 Code: [code]"));
-        assert!(prompt.contains("ICD-10 Code: [code]"));
+        assert!(prompt.contains("ICD-9 Code: [code"));
+        assert!(prompt.contains("ICD-10 Code: [code"));
+        assert!(prompt.contains("Not applicable - no diagnosis clearly discussed"));
+    }
+
+    #[test]
+    fn default_soap_prompt_includes_forbidden_inferences_block() {
+        // The FORBIDDEN INFERENCES block names the most common fabrication
+        // categories so the model has explicit category-level guards beyond
+        // the abstract rule "do not fabricate".
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        assert!(prompt.contains("FORBIDDEN INFERENCES"));
+        // Demographics
+        assert!(prompt.contains("Patient age, sex, gender"));
+        // Stock comorbidity fill (HTN/HLD/T2DM)
+        assert!(prompt.contains("Common comorbidities"));
+        // Default-dose fill
+        assert!(prompt.contains("never pick a canonical dose"));
+        // Invented provider names for referrals
+        assert!(prompt.contains("Provider names for referrals"));
+        // Default follow-up interval
+        assert!(prompt.contains("Follow-up timing not specified"));
+        // Stock red-flag warnings
+        assert!(prompt.contains("Red-flag warnings"));
+        // Forced ICD fill
+        assert!(prompt.contains("ICD codes when no diagnosis"));
+    }
+
+    #[test]
+    fn default_soap_prompt_includes_lab_review_example() {
+        // A second few-shot example covers the lab-review visit pattern
+        // (no HPI, no exam, no PMH). This was the failure mode that
+        // produced the worst hallucinations on real-world transcripts.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        assert!(prompt.contains("EXAMPLE 1"));
+        assert!(prompt.contains("EXAMPLE 2"));
+        assert!(prompt.contains("lab-review visit"));
+        // Lab-review example must teach the "Not applicable" ICD output
+        assert!(prompt.contains("Not applicable - no diagnosis clearly discussed"));
+        // Lab-review example must teach the "dose not specified" pattern
+        assert!(prompt.contains("dose not specified"));
+        // Lab-review example must show that a thin visit produces
+        // mostly "Not discussed" subjective entries
+        let lab_idx = prompt
+            .find("EXAMPLE 2")
+            .expect("EXAMPLE 2 must be present");
+        let after_example = &prompt[lab_idx..];
+        assert!(after_example.contains("Past medical history: Not discussed"));
+        assert!(after_example.contains("Family history: Not discussed"));
+        // Both examples must come before OUTPUT FORMAT
+        let pos_example_2 = prompt.find("EXAMPLE 2").unwrap();
+        let pos_output_format = prompt.find("OUTPUT FORMAT").unwrap();
+        assert!(
+            pos_example_2 < pos_output_format,
+            "EXAMPLE 2 must come before OUTPUT FORMAT"
+        );
+    }
+
+    #[test]
+    fn self_check_lists_category_checks() {
+        // The self-check must be a categorical checklist, not a single
+        // verbal exhortation, so the model walks each common-fabrication
+        // category one at a time.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        assert!(prompt.contains("Demographics check"));
+        assert!(prompt.contains("Medication check"));
+        assert!(prompt.contains("Referral check"));
+        assert!(prompt.contains("Follow-up interval check"));
+        assert!(prompt.contains("Red-flag check"));
+        assert!(prompt.contains("ICD code check"));
+        assert!(prompt.contains("Visit modality check"));
     }
 
     #[test]
@@ -618,7 +782,8 @@ mod tests {
         };
         let prompt = build_soap_prompt(&config);
         // Custom template is used, and placeholders are still resolved
-        assert!(prompt.starts_with("My custom template with ICD-9 Code: [code]"));
+        assert!(prompt.starts_with("My custom template with ICD-9 Code: [code"));
+        assert!(prompt.contains("Not applicable - no diagnosis clearly discussed"));
     }
 
     #[test]
