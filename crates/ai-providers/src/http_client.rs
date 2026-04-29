@@ -233,6 +233,69 @@ pub fn classify(
     }
 }
 
+/// Send a request with retry/backoff per the configured policy.
+///
+/// `factory` is invoked fresh on each attempt because `reqwest::RequestBuilder`
+/// is consumed by `.send()`. The closure typically captures `&Client` and a
+/// `&str` URL plus a serializable body.
+///
+/// Returns the final `Result<Response, Error>` once the request succeeds, hits
+/// a permanent classification, or runs out of retry budget.
+pub async fn send_with_retry<F>(
+    policy: &RetryConfig,
+    factory: F,
+) -> Result<reqwest::Response, reqwest::Error>
+where
+    F: Fn() -> reqwest::RequestBuilder + Send,
+{
+    use rand::thread_rng;
+
+    let mut attempt: u32 = 0;
+    loop {
+        let result = factory().send().await;
+        let decision = classify(&result);
+        let delay = match decision {
+            RetryDecision::Success => {
+                if attempt > 0 {
+                    tracing::info!(
+                        attempts = attempt + 1,
+                        "AI provider recovered after retries",
+                    );
+                }
+                return result;
+            }
+            RetryDecision::Permanent => return result,
+            RetryDecision::Transient => {
+                if attempt >= policy.max_retries {
+                    return result;
+                }
+                policy.jittered(policy.delay_for_attempt(attempt), &mut thread_rng())
+            }
+            RetryDecision::TransientWithDelay(server_delay) => {
+                if attempt >= policy.max_retries {
+                    return result;
+                }
+                std::cmp::min(server_delay, policy.max_delay)
+            }
+        };
+
+        let status = result
+            .as_ref()
+            .ok()
+            .map(|r| r.status().as_u16())
+            .unwrap_or(0);
+        tracing::info!(
+            attempt = attempt + 1,
+            max = policy.max_retries + 1,
+            delay_ms = delay.as_millis() as u64,
+            status,
+            "AI provider transient failure, retrying",
+        );
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,5 +554,202 @@ mod tests {
                 "code {code}"
             );
         }
+    }
+
+    fn fast_policy(max_retries: u32) -> RetryConfig {
+        // Tighter delays so tests don't take forever; same algorithm.
+        RetryConfig {
+            max_retries,
+            initial_delay: Duration::from_millis(20),
+            backoff_factor: 2.0,
+            max_delay: Duration::from_millis(200),
+        }
+    }
+
+    fn build_test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("test client")
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_succeeds_first_try() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        let policy = fast_policy(3);
+
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok");
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_retries_on_503_then_succeeds() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        let policy = fast_policy(3);
+
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok");
+        assert_eq!(resp.status(), 200);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_gives_up_after_max_attempts() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        let policy = fast_policy(3);
+
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok (final response is the 503)");
+        assert_eq!(resp.status(), 503);
+        // Initial + 3 retries = 4 requests.
+        assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_does_not_retry_400() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        let policy = fast_policy(3);
+
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok");
+        assert_eq!(resp.status(), 400);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_does_not_retry_when_disabled() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        let policy = fast_policy(0); // disabled
+
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok");
+        assert_eq!(resp.status(), 503);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_honors_retry_after_header() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "1"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        // Use a policy whose max_delay exceeds 1 s so the Retry-After is not capped.
+        let policy = RetryConfig {
+            max_retries: 3,
+            initial_delay: Duration::from_millis(20),
+            backoff_factor: 2.0,
+            max_delay: Duration::from_secs(5),
+        };
+
+        let start = std::time::Instant::now();
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok");
+        let elapsed = start.elapsed();
+        assert_eq!(resp.status(), 200);
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "expected ≥ ~1 s wait honoring Retry-After: 1, got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_with_retry_caps_retry_after_at_max_delay() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "9999"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        // policy.max_delay == 200 ms; the 9999s Retry-After must be capped.
+        let client = build_test_client();
+        let url = format!("{}/v1/chat", server.uri());
+        let policy = fast_policy(3);
+
+        let start = std::time::Instant::now();
+        let resp = send_with_retry(&policy, || client.post(&url).body("hi"))
+            .await
+            .expect("ok");
+        let elapsed = start.elapsed();
+        assert_eq!(resp.status(), 200);
+        assert!(
+            elapsed <= Duration::from_secs(2),
+            "should cap Retry-After at policy.max_delay; got {elapsed:?}"
+        );
     }
 }
