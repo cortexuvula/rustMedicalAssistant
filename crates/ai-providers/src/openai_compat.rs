@@ -359,13 +359,11 @@ impl OpenAiCompatibleClient {
         let url = format!("{}/chat/completions", self.base_url);
         let body = self.build_request(request);
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+        let response = crate::http_client::send_with_retry(&self.policy, || {
+            self.client.post(&url).json(&body)
+        })
+        .await
+        .map_err(|e| AppError::AiProvider(e.to_string()))?;
 
         let status = response.status();
         let raw_body = response.text().await.unwrap_or_default();
@@ -647,5 +645,101 @@ mod tests {
         assert_eq!(completion.model, "gpt-4o");
         assert_eq!(completion.usage.total_tokens, 15);
         assert!(completion.tool_calls.is_empty());
+    }
+
+    use std::time::Duration;
+
+    fn fast_policy(max_retries: u32) -> RetryConfig {
+        RetryConfig {
+            max_retries,
+            initial_delay: Duration::from_millis(20),
+            backoff_factor: 2.0,
+            max_delay: Duration::from_millis(200),
+        }
+    }
+
+    fn build_test_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("test client")
+    }
+
+    fn make_retry_request() -> CompletionRequest {
+        CompletionRequest {
+            model: "test-model".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: MessageContent::Text("hello".into()),
+                tool_calls: vec![],
+            }],
+            temperature: Some(0.0),
+            max_tokens: None,
+            system_prompt: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_recovers_from_503() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "model": "test-model",
+                "choices": [{
+                    "message": {"content": "hi back"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = OpenAiCompatibleClient::new(
+            build_test_client(),
+            format!("{}/v1", server.uri()),
+            fast_policy(3),
+        );
+
+        let resp = client
+            .complete(&make_retry_request())
+            .await
+            .expect("complete should recover");
+        assert_eq!(resp.content, "hi back");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn complete_does_not_retry_400() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+            .mount(&server)
+            .await;
+
+        let client = OpenAiCompatibleClient::new(
+            build_test_client(),
+            format!("{}/v1", server.uri()),
+            fast_policy(3),
+        );
+
+        let err = client
+            .complete(&make_retry_request())
+            .await
+            .expect_err("400 should be permanent");
+        let msg = format!("{err}");
+        assert!(msg.contains("400"), "expected 400 in error: {msg}");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 }
