@@ -3346,6 +3346,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "medical-core",
+ "rand 0.8.5",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3353,6 +3354,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
