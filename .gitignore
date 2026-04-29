@@ -14,6 +14,9 @@
 # Superpowers brainstorming
 .superpowers/
 
+# Superpowers worktrees
+.worktrees/
+
 # Remember plugin
 .remember/
 
