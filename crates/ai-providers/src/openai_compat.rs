@@ -415,13 +415,11 @@ impl OpenAiCompatibleClient {
         body.stream = Some(true);
         body.stream_options = Some(StreamOptions { include_usage: true });
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+        let response = crate::http_client::send_with_retry(&self.policy, || {
+            self.client.post(&url).json(&body)
+        })
+        .await
+        .map_err(|e| AppError::AiProvider(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -741,5 +739,60 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("400"), "expected 400 in error: {msg}");
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_retries_initial_send() {
+        use futures_util::StreamExt;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+
+        // First two POSTs to /v1/chat/completions return 503 — the initial
+        // SSE send should retry them.
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+
+        // Third POST returns a minimal SSE stream with one delta and a usage chunk.
+        let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n\
+                        data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n\
+                        data: [DONE]\n\n";
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse_body),
+            )
+            .mount(&server)
+            .await;
+
+        let client = OpenAiCompatibleClient::new(
+            build_test_client(),
+            format!("{}/v1", server.uri()),
+            fast_policy(3),
+        );
+
+        let mut stream = client
+            .complete_stream(&make_retry_request())
+            .await
+            .expect("stream should be established after retries");
+
+        // Drain the stream; ensure at least one Delta with text "hi" is observed.
+        let mut saw_delta = false;
+        while let Some(item) = stream.next().await {
+            let chunk = item.expect("no stream errors");
+            if let medical_core::types::StreamChunk::Delta { text } = chunk {
+                if text == "hi" {
+                    saw_delta = true;
+                }
+            }
+        }
+        assert!(saw_delta, "expected to see 'hi' delta");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
     }
 }
