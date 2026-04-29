@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 use reqwest::{Client, header};
+use rand::Rng;
 
 use medical_core::error::{AppError, AppResult};
 use medical_core::types::settings::AppConfig;
@@ -98,6 +99,18 @@ impl RetryConfig {
             },
             ..default
         }
+    }
+
+    /// Apply ±25% jitter to a base delay.
+    /// Returned duration ∈ [0.75 × base, 1.25 × base].
+    /// Caller passes its own RNG so tests can use a seeded one.
+    pub fn jittered<R: Rng + ?Sized>(&self, base: Duration, rng: &mut R) -> Duration {
+        if base.is_zero() {
+            return base;
+        }
+        let factor = rng.gen_range(0.75..=1.25);
+        let millis = (base.as_millis() as f64 * factor) as u64;
+        Duration::from_millis(millis)
     }
 }
 
@@ -217,5 +230,53 @@ mod tests {
         let policy = RetryConfig::from_app_config(&cfg);
         // AppConfig defaults: auto_retry_failed=true, max_retry_attempts=3.
         assert_eq!(policy.max_retries, 3);
+    }
+
+    #[test]
+    fn jittered_within_25_percent_band() {
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        let cfg = RetryConfig::default();
+        let base = Duration::from_millis(1000);
+        let mut rng = StdRng::seed_from_u64(42);
+        for i in 0..1000 {
+            let j = cfg.jittered(base, &mut rng);
+            assert!(
+                j >= Duration::from_millis(750),
+                "iter {i}: got {j:?}, expected >= 750ms"
+            );
+            assert!(
+                j <= Duration::from_millis(1250),
+                "iter {i}: got {j:?}, expected <= 1250ms"
+            );
+        }
+    }
+
+    #[test]
+    fn jittered_zero_base_is_zero() {
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        let cfg = RetryConfig::default();
+        let mut rng = StdRng::seed_from_u64(0);
+        assert_eq!(cfg.jittered(Duration::ZERO, &mut rng), Duration::ZERO);
+    }
+
+    #[test]
+    fn jittered_distribution_spans_band() {
+        // Sanity check: over many samples, both halves of the band are visited.
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        let cfg = RetryConfig::default();
+        let base = Duration::from_millis(1000);
+        let mut rng = StdRng::seed_from_u64(123);
+        let mut saw_below = false;
+        let mut saw_above = false;
+        for _ in 0..500 {
+            let j = cfg.jittered(base, &mut rng);
+            if j < base { saw_below = true; }
+            if j > base { saw_above = true; }
+        }
+        assert!(saw_below, "expected at least one jittered sample < base");
+        assert!(saw_above, "expected at least one jittered sample > base");
     }
 }
