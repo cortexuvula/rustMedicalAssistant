@@ -10,6 +10,7 @@ use medical_core::{
     types::{CompletionRequest, CompletionResponse, ModelInfo, StreamChunk, ToolCompletionResponse, ToolDef},
 };
 
+use crate::http_client::RetryConfig;
 use crate::openai_compat::OpenAiCompatibleClient;
 
 pub struct LmStudioProvider {
@@ -19,16 +20,11 @@ pub struct LmStudioProvider {
 impl LmStudioProvider {
     /// Create a new LM Studio provider.
     ///
-    /// `host` defaults to `http://localhost:1234` when `None`. Returns
-    /// `Err(AppError::AiProvider)` if the underlying reqwest client cannot be
-    /// constructed — callers can log and skip the provider instead of taking
-    /// the whole process down.
-    pub fn new(host: Option<&str>) -> AppResult<Self> {
+    /// `host` defaults to `http://localhost:1234` when `None`.
+    /// `policy` controls retry behavior for inner HTTP calls.
+    pub fn new(host: Option<&str>, policy: RetryConfig) -> AppResult<Self> {
         let base = host.unwrap_or("http://localhost:1234");
         let base_url = format!("{base}/v1");
-        // No auth header for LM Studio (local server).
-        // 120 s was observed to cut off real generations on longer prompts;
-        // bump to 300 s so a slow but progressing model isn't killed.
         let http = Client::builder()
             .pool_max_idle_per_host(5)
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -36,7 +32,7 @@ impl LmStudioProvider {
             .build()
             .map_err(|e| AppError::AiProvider(format!("Failed to build LM Studio HTTP client: {e}")))?;
         Ok(Self {
-            client: OpenAiCompatibleClient::new(http, base_url),
+            client: OpenAiCompatibleClient::new(http, base_url, policy),
         })
     }
 }
@@ -105,13 +101,17 @@ mod tests {
 
     #[test]
     fn creates_with_default_host() {
-        let p = LmStudioProvider::new(None).expect("build default provider");
+        let p = LmStudioProvider::new(None, RetryConfig::default()).expect("build default provider");
         assert_eq!(p.client.base_url, "http://localhost:1234/v1");
     }
 
     #[test]
     fn creates_with_custom_host() {
-        let p = LmStudioProvider::new(Some("http://192.168.1.10:1234")).expect("build custom provider");
+        let p = LmStudioProvider::new(
+            Some("http://192.168.1.10:1234"),
+            RetryConfig::default(),
+        )
+        .expect("build custom provider");
         assert_eq!(p.client.base_url, "http://192.168.1.10:1234/v1");
     }
 }

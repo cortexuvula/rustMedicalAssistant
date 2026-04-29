@@ -10,6 +10,7 @@ use medical_core::{
     types::{CompletionRequest, CompletionResponse, ModelInfo, StreamChunk, ToolCompletionResponse, ToolDef},
 };
 
+use crate::http_client::RetryConfig;
 use crate::openai_compat::OpenAiCompatibleClient;
 
 pub struct OllamaProvider {
@@ -19,15 +20,13 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     /// Create a new Ollama provider.
     ///
-    /// `host` defaults to `http://localhost:11434` when `None`. Returns
-    /// `Err(AppError::AiProvider)` if the reqwest client can't be built
-    /// rather than panicking.
-    pub fn new(host: Option<&str>) -> AppResult<Self> {
+    /// `host` defaults to `http://localhost:11434` when `None`.
+    /// `policy` controls retry behavior for inner HTTP calls.
+    /// Returns `Err(AppError::AiProvider)` if the reqwest client can't be built.
+    pub fn new(host: Option<&str>, policy: RetryConfig) -> AppResult<Self> {
         let base = host.unwrap_or("http://localhost:11434");
         let base_url = format!("{base}/v1");
         // No auth header for Ollama.
-        // Matches the LM Studio bound — local model inference can legitimately
-        // take several minutes on long prompts and we'd rather not kill it.
         let http = Client::builder()
             .pool_max_idle_per_host(5)
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -35,7 +34,7 @@ impl OllamaProvider {
             .build()
             .map_err(|e| AppError::AiProvider(format!("Failed to build Ollama HTTP client: {e}")))?;
         Ok(Self {
-            client: OpenAiCompatibleClient::new(http, base_url),
+            client: OpenAiCompatibleClient::new(http, base_url, policy),
         })
     }
 }
@@ -104,13 +103,17 @@ mod tests {
 
     #[test]
     fn creates_with_default_host() {
-        let p = OllamaProvider::new(None).expect("build default provider");
+        let p = OllamaProvider::new(None, RetryConfig::default()).expect("build default provider");
         assert_eq!(p.client.base_url, "http://localhost:11434/v1");
     }
 
     #[test]
     fn creates_with_custom_host() {
-        let p = OllamaProvider::new(Some("http://192.168.1.10:11434")).expect("build custom provider");
+        let p = OllamaProvider::new(
+            Some("http://192.168.1.10:11434"),
+            RetryConfig::default(),
+        )
+        .expect("build custom provider");
         assert_eq!(p.client.base_url, "http://192.168.1.10:11434/v1");
     }
 }

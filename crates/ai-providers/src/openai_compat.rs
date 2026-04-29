@@ -18,6 +18,7 @@ use medical_core::{
     },
 };
 
+use crate::http_client::RetryConfig;
 use crate::sse::parse_sse_response;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -160,13 +161,19 @@ struct ApiModelEntry {
 pub struct OpenAiCompatibleClient {
     pub client: Client,
     pub base_url: String,
+    pub policy: RetryConfig,
 }
 
 impl OpenAiCompatibleClient {
-    pub fn new(client: Client, base_url: impl Into<String>) -> Self {
+    pub fn new(
+        client: Client,
+        base_url: impl Into<String>,
+        policy: RetryConfig,
+    ) -> Self {
         Self {
             client,
             base_url: base_url.into(),
+            policy,
         }
     }
 
@@ -574,7 +581,7 @@ mod tests {
 
     fn make_client() -> OpenAiCompatibleClient {
         // Build without real auth — only used for struct-level tests.
-        OpenAiCompatibleClient::new(Client::new(), "https://api.openai.com/v1")
+        OpenAiCompatibleClient::new(Client::new(), "https://api.openai.com/v1", RetryConfig::default())
     }
 
     fn make_request() -> CompletionRequest {
