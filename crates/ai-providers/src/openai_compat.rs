@@ -332,12 +332,11 @@ impl OpenAiCompatibleClient {
     /// Fetch the list of model IDs from the `/models` endpoint.
     pub async fn list_models(&self) -> AppResult<Vec<String>> {
         let url = format!("{}/models", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+        let response = crate::http_client::send_with_retry(&self.policy, || {
+            self.client.get(&url)
+        })
+        .await
+        .map_err(|e| AppError::AiProvider(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -510,13 +509,11 @@ impl OpenAiCompatibleClient {
                 .collect(),
         );
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::AiProvider(e.to_string()))?;
+        let response = crate::http_client::send_with_retry(&self.policy, || {
+            self.client.post(&url).json(&body)
+        })
+        .await
+        .map_err(|e| AppError::AiProvider(e.to_string()))?;
 
         if !response.status().is_success() {
             let status = response.status();
