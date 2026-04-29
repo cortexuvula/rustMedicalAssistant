@@ -155,6 +155,84 @@ impl CircuitBreaker {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Retry classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The classification of a single request outcome for retry decisions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RetryDecision {
+    /// 2xx — done.
+    Success,
+    /// Non-retryable error — return immediately.
+    Permanent,
+    /// Retryable — use the configured backoff schedule.
+    Transient,
+    /// Retryable with a server-specified delay (from `Retry-After`).
+    TransientWithDelay(Duration),
+}
+
+/// Parse a `Retry-After` HTTP header.
+/// Supports `delta-seconds` (RFC 7231 § 7.1.3). Returns `None` if absent,
+/// not a valid integer, or HTTP-date format (HTTP-date is intentionally
+/// unsupported — local providers do not send it).
+pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let v = headers.get(reqwest::header::RETRY_AFTER)?;
+    let s = v.to_str().ok()?;
+    s.trim().parse::<u64>().ok().map(Duration::from_secs)
+}
+
+/// Classify an HTTP status (with response headers) for retry purposes.
+pub fn classify_status(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> RetryDecision {
+    if status.is_success() {
+        return RetryDecision::Success;
+    }
+    let transient = matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504);
+    if !transient {
+        return RetryDecision::Permanent;
+    }
+    if let Some(d) = parse_retry_after(headers) {
+        RetryDecision::TransientWithDelay(d)
+    } else {
+        RetryDecision::Transient
+    }
+}
+
+/// Classify a transport-level error from `reqwest`.
+///
+/// Connection-refused (`is_connect()`) is treated as **Permanent** — the
+/// local provider isn't running, and retrying for 7 s won't change that.
+/// Read/connect timeouts and other transport errors are **Transient**.
+/// Body/decode errors mean the server returned malformed data — Permanent.
+pub fn classify_error(err: &reqwest::Error) -> RetryDecision {
+    if err.is_connect() {
+        return RetryDecision::Permanent;
+    }
+    if err.is_timeout() {
+        return RetryDecision::Transient;
+    }
+    if err.is_body() || err.is_decode() {
+        return RetryDecision::Permanent;
+    }
+    if err.is_request() {
+        return RetryDecision::Transient;
+    }
+    RetryDecision::Permanent
+}
+
+/// Classify a `Result<reqwest::Response, reqwest::Error>` for retry purposes.
+pub fn classify(
+    result: &Result<reqwest::Response, reqwest::Error>,
+) -> RetryDecision {
+    match result {
+        Ok(r) => classify_status(r.status(), r.headers()),
+        Err(e) => classify_error(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +356,140 @@ mod tests {
         }
         assert!(saw_below, "expected at least one jittered sample < base");
         assert!(saw_above, "expected at least one jittered sample > base");
+    }
+
+    fn make_headers(retry_after: Option<&str>) -> reqwest::header::HeaderMap {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut h = HeaderMap::new();
+        if let Some(v) = retry_after {
+            h.insert(
+                reqwest::header::RETRY_AFTER,
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn parse_retry_after_seconds() {
+        let h = make_headers(Some("30"));
+        assert_eq!(parse_retry_after(&h), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn parse_retry_after_missing_returns_none() {
+        let h = make_headers(None);
+        assert_eq!(parse_retry_after(&h), None);
+    }
+
+    #[test]
+    fn parse_retry_after_malformed_returns_none() {
+        let h = make_headers(Some("banana"));
+        assert_eq!(parse_retry_after(&h), None);
+    }
+
+    #[test]
+    fn parse_retry_after_unparseable_http_date_returns_none() {
+        // HTTP-date support is deliberately not implemented (see plan scope reduction).
+        let h = make_headers(Some("Sun, 06 Nov 1994 08:49:37 GMT"));
+        assert_eq!(parse_retry_after(&h), None);
+    }
+
+    #[test]
+    fn parse_retry_after_zero_seconds() {
+        let h = make_headers(Some("0"));
+        assert_eq!(parse_retry_after(&h), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn classify_status_2xx_success() {
+        let h = make_headers(None);
+        assert_eq!(
+            classify_status(reqwest::StatusCode::OK, &h),
+            RetryDecision::Success
+        );
+        assert_eq!(
+            classify_status(reqwest::StatusCode::CREATED, &h),
+            RetryDecision::Success
+        );
+        assert_eq!(
+            classify_status(reqwest::StatusCode::NO_CONTENT, &h),
+            RetryDecision::Success
+        );
+    }
+
+    #[test]
+    fn classify_status_503_transient() {
+        let h = make_headers(None);
+        assert_eq!(
+            classify_status(reqwest::StatusCode::SERVICE_UNAVAILABLE, &h),
+            RetryDecision::Transient
+        );
+    }
+
+    #[test]
+    fn classify_status_503_with_retry_after() {
+        let h = make_headers(Some("5"));
+        assert_eq!(
+            classify_status(reqwest::StatusCode::SERVICE_UNAVAILABLE, &h),
+            RetryDecision::TransientWithDelay(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn classify_status_429_with_retry_after() {
+        let h = make_headers(Some("2"));
+        assert_eq!(
+            classify_status(reqwest::StatusCode::TOO_MANY_REQUESTS, &h),
+            RetryDecision::TransientWithDelay(Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn classify_status_408_transient() {
+        let h = make_headers(None);
+        assert_eq!(
+            classify_status(reqwest::StatusCode::REQUEST_TIMEOUT, &h),
+            RetryDecision::Transient
+        );
+    }
+
+    #[test]
+    fn classify_status_500_502_504_transient() {
+        let h = make_headers(None);
+        for code in [500u16, 502, 504] {
+            let s = reqwest::StatusCode::from_u16(code).unwrap();
+            assert_eq!(
+                classify_status(s, &h),
+                RetryDecision::Transient,
+                "code {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_status_permanent_4xx() {
+        let h = make_headers(None);
+        for code in [400u16, 401, 403, 404, 405, 409, 410, 413, 414, 415, 422] {
+            let s = reqwest::StatusCode::from_u16(code).unwrap();
+            assert_eq!(
+                classify_status(s, &h),
+                RetryDecision::Permanent,
+                "code {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_status_permanent_other_5xx() {
+        let h = make_headers(None);
+        for code in [501u16, 505] {
+            let s = reqwest::StatusCode::from_u16(code).unwrap();
+            assert_eq!(
+                classify_status(s, &h),
+                RetryDecision::Permanent,
+                "code {code}"
+            );
+        }
     }
 }
