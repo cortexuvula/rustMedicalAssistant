@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use reqwest::{Client, header};
 
 use medical_core::error::{AppError, AppResult};
+use medical_core::types::settings::AppConfig;
 
 /// Build a reqwest client with Bearer-token auth.
 ///
@@ -82,6 +83,21 @@ impl RetryConfig {
             * self.backoff_factor.powi(attempt as i32);
         let capped = millis.min(self.max_delay.as_millis() as f64) as u64;
         Duration::from_millis(capped)
+    }
+
+    /// Construct policy from user-facing AppConfig settings.
+    /// `auto_retry_failed=false` produces `max_retries=0` (no retries).
+    /// Tuning constants (initial_delay, backoff_factor, max_delay) stay at defaults.
+    pub fn from_app_config(cfg: &AppConfig) -> Self {
+        let default = Self::default();
+        Self {
+            max_retries: if cfg.auto_retry_failed {
+                cfg.max_retry_attempts
+            } else {
+                0
+            },
+            ..default
+        }
     }
 }
 
@@ -169,5 +185,37 @@ mod tests {
         assert!(cb.is_open());
         cb.record_success();
         assert!(!cb.is_open());
+    }
+
+    #[test]
+    fn from_app_config_disabled_zero_retries() {
+        use medical_core::types::settings::AppConfig;
+        let mut cfg = AppConfig::default();
+        cfg.auto_retry_failed = false;
+        cfg.max_retry_attempts = 5;
+        let policy = RetryConfig::from_app_config(&cfg);
+        assert_eq!(policy.max_retries, 0);
+    }
+
+    #[test]
+    fn from_app_config_reads_max_attempts() {
+        use medical_core::types::settings::AppConfig;
+        let mut cfg = AppConfig::default();
+        cfg.auto_retry_failed = true;
+        cfg.max_retry_attempts = 5;
+        let policy = RetryConfig::from_app_config(&cfg);
+        assert_eq!(policy.max_retries, 5);
+        assert_eq!(policy.initial_delay, Duration::from_secs(1));
+        assert!((policy.backoff_factor - 2.0).abs() < f64::EPSILON);
+        assert_eq!(policy.max_delay, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn from_app_config_default_uses_three_retries() {
+        use medical_core::types::settings::AppConfig;
+        let cfg = AppConfig::default();
+        let policy = RetryConfig::from_app_config(&cfg);
+        // AppConfig defaults: auto_retry_failed=true, max_retry_attempts=3.
+        assert_eq!(policy.max_retries, 3);
     }
 }
