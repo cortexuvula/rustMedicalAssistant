@@ -2,7 +2,7 @@
   import { selectedRecording, recordings, selectRecording } from '../stores/recordings';
   import { generateSoap, generateReferral, generateLetter } from '../api/generation';
   import { generation } from '../stores/generation';
-  import { copyToClipboard } from '../utils/clipboard';
+  import { copyWithStatus } from '../utils/clipboard';
   import { splitLines } from '../utils/text';
   import GenerateItem from '../components/GenerateItem.svelte';
   import { rsvp } from '../stores/rsvp';
@@ -68,15 +68,10 @@
       : type === 'referral' ? $selectedRecording.referral
       : $selectedRecording.letter;
     if (!text) return;
-    copyStatus = { ...copyStatus, [type]: 'copying' };
-    try {
-      await copyToClipboard(text);
-      copyStatus = { ...copyStatus, [type]: 'copied' };
-      setTimeout(() => { copyStatus = { ...copyStatus, [type]: 'idle' }; }, 2000);
-    } catch (e) {
-      console.error('Failed to copy:', e);
-      copyStatus = { ...copyStatus, [type]: 'idle' };
-    }
+    await copyWithStatus({
+      setStatus: (s) => (copyStatus = { ...copyStatus, [type]: s }),
+      getText: () => text,
+    });
   }
 
   function handleSpeedRead(type: string) {

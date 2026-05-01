@@ -5,7 +5,7 @@
   import { recordings } from '../stores/recordings';
   import { importAudioFile, getRecording } from '../api/recordings';
   import { checkRecordingAudioLevels } from '../api/audio';
-  import { copyToClipboard } from '../utils/clipboard';
+  import { copyWithStatus } from '../utils/clipboard';
   import RecordingHeader from '../components/RecordingHeader.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { open } from '@tauri-apps/plugin-dialog';
@@ -255,21 +255,14 @@
     if (copyStatus !== 'idle') return;
     const rid = pipelineRecordingId;
     if (!rid) return;
-    copyStatus = 'copying';
-    try {
-      const rec = await getRecording(rid);
-      if (rec?.soap_note) {
-        await copyToClipboard(rec.soap_note);
-        copyStatus = 'copied';
-        setTimeout(() => { copyStatus = 'idle'; }, 2000);
-      } else {
-        copyStatus = 'idle';
-      }
-    } catch (e) {
-      console.error('Failed to copy SOAP note:', e);
-      toasts.error(`Failed to copy SOAP note: ${e}`);
-      copyStatus = 'idle';
-    }
+    await copyWithStatus({
+      setStatus: (s) => (copyStatus = s),
+      getText: async () => {
+        const rec = await getRecording(rid);
+        return rec?.soap_note ?? undefined;
+      },
+      onError: (e) => toasts.error(`Failed to copy SOAP note: ${e}`),
+    });
   }
 
   async function handleSpeedRead() {
