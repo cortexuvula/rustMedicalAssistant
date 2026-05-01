@@ -55,7 +55,6 @@ fn raw_machine_id() -> SecurityResult<String> {
             for line in text.lines() {
                 if line.contains("IOPlatformUUID") {
                     if let Some(start) = line.rfind('"') {
-                        let after = &line[start + 1..];
                         // second quote is immediately after
                         if let Some(end) = line[..start].rfind('"') {
                             let uuid = &line[end + 1..start];
