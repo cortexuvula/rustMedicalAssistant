@@ -7,6 +7,7 @@
   } from '../api/contextTemplates';
   import { contextTemplates } from '../stores/contextTemplates';
   import { formatError } from '../types/errors';
+  import { onMount, onDestroy } from 'svelte';
 
   interface Props {
     open: boolean;
@@ -14,6 +15,21 @@
   }
 
   let { open, onclose }: Props = $props();
+
+  function handleEscape(e: KeyboardEvent) {
+    if (open && e.key === 'Escape') {
+      onclose();
+      e.stopImmediatePropagation();
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener('keydown', handleEscape, { capture: true });
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('keydown', handleEscape, { capture: true });
+  });
 
   let loading = $state(false);
   let searchText = $state('');

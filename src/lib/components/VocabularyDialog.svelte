@@ -11,6 +11,7 @@
   } from '../api/vocabulary';
   import { toasts } from '../stores/toasts';
   import { formatError } from '../types/errors';
+  import { onMount, onDestroy } from 'svelte';
 
   interface Props {
     open: boolean;
@@ -18,6 +19,21 @@
   }
 
   let { open, onclose }: Props = $props();
+
+  function handleEscape(e: KeyboardEvent) {
+    if (open && e.key === 'Escape') {
+      onclose();
+      e.stopImmediatePropagation();
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener('keydown', handleEscape, { capture: true });
+  });
+
+  onDestroy(() => {
+    window.removeEventListener('keydown', handleEscape, { capture: true });
+  });
 
   let entries = $state<VocabularyEntry[]>([]);
   let loading = $state(false);
