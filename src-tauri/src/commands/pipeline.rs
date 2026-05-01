@@ -198,12 +198,19 @@ impl Drop for CancelGuard {
     }
 }
 
-/// Signal a running pipeline to cancel at its next stage boundary.
+/// Cancel an in-progress pipeline run for the given recording_id.
 ///
-/// Returns `true` if a pipeline with that id was found and flagged, `false`
-/// if no pipeline was registered under that recording id. Does not kill an
-/// in-flight HTTP call — cancellation takes effect between transcription and
-/// SOAP generation, or when the current network timeout fires.
+/// Looks up the recording's `CancellationToken` in the registry and fires it.
+/// Effects:
+/// - Remote STT provider: aborts the in-flight HTTP request via `tokio::select!`
+///   on `cancel.cancelled()` (drops the reqwest future, tears down the TCP
+///   connection).
+/// - Local STT provider: returns `AppError::Cancelled` before model load if the
+///   token is already cancelled, or after the blocking whisper pass returns
+///   if the user cancelled mid-pass. Cannot interrupt whisper-rs mid-pass
+///   (would require callback plumbing).
+/// - Stage transitions: the pipeline checks the token between transcription
+///   and SOAP generation and bails if cancelled.
 #[tauri::command]
 pub fn cancel_pipeline(
     state: tauri::State<'_, AppState>,
