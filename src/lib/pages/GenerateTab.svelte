@@ -3,7 +3,7 @@
   import { generateSoap, generateReferral, generateLetter } from '../api/generation';
   import { generation } from '../stores/generation';
   import { copyWithStatus } from '../utils/clipboard';
-  import { splitLines } from '../utils/text';
+  import { buildPatientContext } from '../utils/patient_context';
   import GenerateItem from '../components/GenerateItem.svelte';
   import { rsvp } from '../stores/rsvp';
   import type { DocKind } from '../stores/rsvp';
@@ -87,27 +87,6 @@
     }
   }
 
-  /**
-   * Build a `PatientContext` payload from the three structured textareas.
-   * Returns `undefined` when every list is empty so the backend stores
-   * nothing and renders no Patient record block.
-   */
-  function buildPatientContext(): PatientContext | undefined {
-    const medications = splitLines(medicationsText);
-    const allergies = splitLines(allergiesText);
-    const conditions = splitLines(conditionsText);
-    if (medications.length === 0 && allergies.length === 0 && conditions.length === 0) {
-      return undefined;
-    }
-    return {
-      patient_name: null,
-      prior_soap_notes: [],
-      medications,
-      allergies,
-      conditions,
-    };
-  }
-
   async function handleGenerate(type: 'soap' | 'referral' | 'letter') {
     if (!$selectedRecording) return;
     const recordingId = $selectedRecording.id;
@@ -115,7 +94,7 @@
     try {
       if (type === 'soap') {
         const ctx = contextText.trim() || undefined;
-        const pc = buildPatientContext();
+        const pc = buildPatientContext(medicationsText, allergiesText, conditionsText);
         console.log(
           '[GenerateTab] SOAP generate —',
           'context:',
