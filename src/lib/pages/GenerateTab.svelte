@@ -22,7 +22,6 @@
     { label: 'Follow-up', text: 'Follow-up visit for ongoing condition. Previous visit findings:\n\n' },
     { label: 'New Patient', text: 'New patient consultation. No prior history available.\n\n' },
     { label: 'Lab Results', text: 'Recent lab results:\n- \n- \n- \n\n' },
-    { label: 'Medications', text: 'Current medications:\n- \n- \n- \n\n' },
     { label: 'Referral Info', text: 'Referred by: \nReason for referral: \nRelevant history: \n\n' },
   ];
 
