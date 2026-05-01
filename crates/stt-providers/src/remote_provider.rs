@@ -99,6 +99,7 @@ impl RemoteSttProvider {
         &self,
         wav_bytes: Vec<u8>,
         language: Option<&str>,
+        cancel: &CancellationToken,
     ) -> AppResult<VerboseJson> {
         let url = format!("{}/v1/audio/transcriptions", self.base_url);
 
@@ -121,21 +122,33 @@ impl RemoteSttProvider {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
 
-        let resp = req.send().await.map_err(|e| {
-            if e.is_timeout() {
-                AppError::SttProvider(format!(
-                    "Transcription timed out after {}s",
-                    TRANSCRIBE_TIMEOUT.as_secs()
-                ))
-            } else if e.is_connect() {
-                AppError::SttProvider(format!(
-                    "Cannot reach Whisper server at {}: {e}",
-                    self.base_url
-                ))
-            } else {
-                AppError::SttProvider(format!("Whisper request failed: {e}"))
+        // Drive the HTTP send concurrently with the cancellation token. With
+        // `biased;`, the cancel branch is checked first on each poll so a
+        // mid-flight cancellation is observed promptly. Dropping the request
+        // future tears down the underlying reqwest connection at the TCP layer.
+        let resp = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                return Err(AppError::Cancelled);
             }
-        })?;
+            result = req.send() => {
+                result.map_err(|e| {
+                    if e.is_timeout() {
+                        AppError::SttProvider(format!(
+                            "Transcription timed out after {}s",
+                            TRANSCRIBE_TIMEOUT.as_secs()
+                        ))
+                    } else if e.is_connect() {
+                        AppError::SttProvider(format!(
+                            "Cannot reach Whisper server at {}: {e}",
+                            self.base_url
+                        ))
+                    } else {
+                        AppError::SttProvider(format!("Whisper request failed: {e}"))
+                    }
+                })?
+            }
+        };
 
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
@@ -156,9 +169,15 @@ impl RemoteSttProvider {
             )));
         }
 
-        resp.json::<VerboseJson>().await.map_err(|e| {
-            AppError::SttProvider(format!("Unexpected response from Whisper server: {e}"))
-        })
+        // Body parsing is also awaited under cancellation — large/slow responses
+        // shouldn't pin the caller after they've asked to bail out.
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(AppError::Cancelled),
+            result = resp.json::<VerboseJson>() => result.map_err(|e| {
+                AppError::SttProvider(format!("Unexpected response from Whisper server: {e}"))
+            }),
+        }
     }
 }
 
@@ -180,7 +199,7 @@ impl SttProvider for RemoteSttProvider {
         &self,
         audio: AudioData,
         config: SttConfig,
-        _cancel: CancellationToken,
+        cancel: CancellationToken,
     ) -> AppResult<Transcript> {
         let duration = audio.duration_seconds();
 
@@ -189,8 +208,10 @@ impl SttProvider for RemoteSttProvider {
         let samples_i16 = audio_prep::f32_to_i16(&audio_16k);
         let wav_bytes = audio_prep::write_pcm16_wav_bytes(&samples_i16, TARGET_SAMPLE_RATE);
 
-        // Stage 2: POST to the Whisper server.
-        let parsed = self.post_audio(wav_bytes, config.language.as_deref()).await?;
+        // Stage 2: POST to the Whisper server (cancellable via tokio::select!).
+        let parsed = self
+            .post_audio(wav_bytes, config.language.as_deref(), &cancel)
+            .await?;
 
         // Capture the server's full-text field (if any) before consuming `parsed.segments`.
         let server_text = parsed.text.clone();
@@ -472,6 +493,56 @@ mod tests {
         )
         .expect("build");
         assert!(!p.diarization_available());
+    }
+
+    #[tokio::test]
+    async fn transcribe_returns_promptly_when_cancelled_mid_request() {
+        use std::time::{Duration, Instant};
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Mock server that delays the response by 5 seconds — far longer
+        // than the test should tolerate if cancellation works.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "should not arrive"}))
+                    .set_delay(Duration::from_secs(5)),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = provider_at(&server.uri(), None);
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        // Cancel after 100ms.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            cancel_clone.cancel();
+        });
+
+        let started = Instant::now();
+        let result = provider
+            .transcribe(dummy_audio(), SttConfig::default(), cancel)
+            .await;
+        let elapsed = started.elapsed();
+
+        // Should have returned an error (cancelled) well under the 5s mock delay.
+        assert!(result.is_err(), "expected Err on cancellation, got {:?}", result);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "transcribe should return promptly on cancel, took {:?}",
+            elapsed
+        );
+        // The error should mention cancellation.
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("cancel"),
+            "expected error to mention cancel, got: {msg}"
+        );
     }
 
     #[tokio::test]
