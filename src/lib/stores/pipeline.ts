@@ -4,6 +4,7 @@ import { processRecording, cancelPipeline } from '../api/pipeline';
 import { recordings } from './recordings';
 import { log } from '../api/logging';
 import { formatError } from '../types/errors';
+import type { PatientContext } from '../types';
 
 export type PipelineStage = 'idle' | 'transcribing' | 'generating_soap' | 'completed' | 'failed';
 
@@ -111,7 +112,7 @@ function createPipelineStore() {
     },
 
     /** Launch the pipeline for a recording. Non-blocking — returns immediately. */
-    launch(recordingId: string, context?: string, template?: string) {
+    launch(recordingId: string, context?: string, template?: string, patientContext?: PatientContext) {
       // If a prior pipeline for this recording id still has a pending cleanup
       // timer, cancel it — otherwise the stale timer could delete this fresh
       // entry once it fires.
@@ -135,10 +136,15 @@ function createPipelineStore() {
         active: { ...s.active, [recordingId]: entry },
       }));
 
-      log.info('Pipeline launched', { recordingId, hasContext: !!context, template: template ?? 'default' });
+      log.info('Pipeline launched', {
+        recordingId,
+        hasContext: !!context,
+        template: template ?? 'default',
+        hasPatientContext: !!patientContext,
+      });
 
       // Fire and forget — progress comes via events
-      processRecording(recordingId, context, template).catch((err) => {
+      processRecording(recordingId, context, template, patientContext).catch((err) => {
         const message = formatError(err);
         log.error('Pipeline command failed', { recordingId, error: message });
         update((s) => {
@@ -165,8 +171,8 @@ function createPipelineStore() {
     },
 
     /** Retry a failed pipeline. */
-    retry(recordingId: string, context?: string, template?: string) {
-      this.launch(recordingId, context, template);
+    retry(recordingId: string, context?: string, template?: string, patientContext?: PatientContext) {
+      this.launch(recordingId, context, template, patientContext);
     },
 
     /** Signal a running pipeline to cancel at its next stage boundary. */
