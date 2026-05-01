@@ -6,6 +6,16 @@ export type ProcessingStatus =
   | { status: 'completed'; completed_at: string }
   | { status: 'failed'; error: string; retry_count: number };
 
+// ── Patient Context ────────────────────────────────────────────────────────────
+
+export interface PatientContext {
+  patient_name?: string | null;
+  prior_soap_notes?: string[];
+  medications: string[];
+  conditions: string[];
+  allergies: string[];
+}
+
 // ── Recording ─────────────────────────────────────────────────────────────────
 
 export interface Recording {
@@ -25,7 +35,11 @@ export interface Recording {
   tags: string[];
   status: ProcessingStatus;
   created_at: string;
-  metadata: any;
+  metadata: {
+    context?: string;
+    patient_context?: PatientContext;
+    [key: string]: unknown;
+  } | null;
 }
 
 // ── Recording Summary ─────────────────────────────────────────────────────────
