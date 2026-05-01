@@ -310,7 +310,7 @@ async fn generate_soap_inner(
     };
 
     let system_prompt = soap_generator::build_soap_prompt(&config);
-    let user_prompt = soap_generator::build_user_prompt(transcript, context);
+    let user_prompt = soap_generator::build_user_prompt(transcript, context, None);
 
     debug!(
         "generate_soap: provider='{}', recording='{}', context_len={}, context_preview='{}'",

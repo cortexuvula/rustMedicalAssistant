@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use chrono::Local;
 use medical_core::types::settings::SoapTemplate;
+use medical_core::types::PatientContext;
 use regex::Regex;
 use tracing::{debug, info, warn};
 
@@ -394,7 +395,11 @@ pub fn sanitize_prompt(text: &str) -> String {
 /// 2. Truncate context to `MAX_CONTEXT_LENGTH` if needed
 /// 3. Prepend current date/time
 /// 4. Assemble parts
-pub fn build_user_prompt(transcript: &str, context: Option<&str>) -> String {
+pub fn build_user_prompt(
+    transcript: &str,
+    context: Option<&str>,
+    patient_context: Option<&PatientContext>,
+) -> String {
     let clean_transcript = sanitize_prompt(transcript);
     debug!(
         raw_transcript_len = transcript.len(),
@@ -408,6 +413,9 @@ pub fn build_user_prompt(transcript: &str, context: Option<&str>) -> String {
     let transcript_with_dt = format!("{time_date}\n\n{clean_transcript}");
 
     let mut parts: Vec<String> = Vec::new();
+
+    // Patient record block intentionally not rendered yet — Task 3 wires it.
+    let _ = patient_context;
 
     // Transcript comes FIRST — it is the primary source for the SOAP note.
     parts.push(format!(
@@ -841,7 +849,7 @@ mod tests {
 
     #[test]
     fn user_prompt_includes_datetime() {
-        let prompt = build_user_prompt("patient says hello", None);
+        let prompt = build_user_prompt("patient says hello", None, None);
         assert!(prompt.contains("Time"));
         assert!(prompt.contains("Date"));
         assert!(prompt.contains("patient says hello"));
@@ -909,7 +917,7 @@ mod tests {
 
     #[test]
     fn user_prompt_with_context() {
-        let prompt = build_user_prompt("patient transcript", Some("prior visit notes"));
+        let prompt = build_user_prompt("patient transcript", Some("prior visit notes"), None);
         assert!(prompt.contains("Supplementary background"));
         assert!(prompt.contains("prior visit notes"));
         assert!(prompt.contains("patient transcript"));
@@ -965,7 +973,7 @@ mod tests {
         transcript.push_str(&" treatment plan discussion ".repeat(800)); // ~20K
         assert!(transcript.len() > 30_000);
 
-        let prompt = build_user_prompt(&transcript, None);
+        let prompt = build_user_prompt(&transcript, None, None);
         assert!(
             prompt.contains(middle_marker),
             "build_user_prompt dropped transcript content past 10K chars"
