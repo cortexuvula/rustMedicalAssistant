@@ -250,6 +250,13 @@ fn validate_patient_context(pc: &PatientContext) -> AppResult<()> {
     Ok(())
 }
 
+/// True iff every surfaced list (`medications`, `allergies`, `conditions`)
+/// is empty. Such a payload contributes nothing to the prompt and must not
+/// be persisted, so the recording metadata stays clean.
+fn patient_context_is_empty(pc: &PatientContext) -> bool {
+    pc.medications.is_empty() && pc.allergies.is_empty() && pc.conditions.is_empty()
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -265,6 +272,7 @@ pub async fn generate_soap(
     recording_id: String,
     template: Option<String>,
     context: Option<String>,
+    patient_context: Option<PatientContext>,
 ) -> AppResult<String> {
     // Reject oversized user-supplied context up front, before emitting "started"
     // or touching the DB / provider.
@@ -277,6 +285,9 @@ pub async fn generate_soap(
             )));
         }
     }
+    if let Some(ref pc) = patient_context {
+        validate_patient_context(pc)?;
+    }
 
     // Emit: started
     let _ = app.emit(
@@ -288,7 +299,14 @@ pub async fn generate_soap(
         },
     );
 
-    let result = generate_soap_inner(&state, &recording_id, template.as_deref(), context.as_deref()).await;
+    let result = generate_soap_inner(
+        &state,
+        &recording_id,
+        template.as_deref(),
+        context.as_deref(),
+        patient_context.as_ref(),
+    )
+    .await;
 
     match &result {
         Ok(_) => {
@@ -316,12 +334,13 @@ pub async fn generate_soap(
     result
 }
 
-#[instrument(skip(state, context), fields(recording_id = %recording_id))]
+#[instrument(skip(state, context, patient_context), fields(recording_id = %recording_id))]
 async fn generate_soap_inner(
     state: &AppState,
     recording_id: &str,
     template: Option<&str>,
     context: Option<&str>,
+    patient_context: Option<&PatientContext>,
 ) -> AppResult<String> {
     let (mut recording, settings) =
         load_recording_and_settings(&state.db, recording_id).await?;
@@ -349,6 +368,7 @@ async fn generate_soap_inner(
         template = template.unwrap_or("follow_up"),
         transcript_len = transcript.len(),
         context_len = context.map(|c| c.len()).unwrap_or(0),
+        patient_context_present = patient_context.is_some(),
         "Generating SOAP note"
     );
 
@@ -362,14 +382,14 @@ async fn generate_soap_inner(
     };
 
     let system_prompt = soap_generator::build_soap_prompt(&config);
-    let user_prompt = soap_generator::build_user_prompt(transcript, context, None);
+    let user_prompt = soap_generator::build_user_prompt(transcript, context, patient_context);
 
     debug!(
-        "generate_soap: provider='{}', recording='{}', context_len={}, context_preview='{}'",
+        "generate_soap: provider='{}', recording='{}', context_len={}, patient_context_present={}",
         provider.name(),
         recording_id,
         context.map(|c| c.len()).unwrap_or(0),
-        context.map(|c| &c[..c.len().min(100)]).unwrap_or("(none)"),
+        patient_context.is_some(),
     );
     let request = build_completion_request(
         system_prompt,
@@ -407,14 +427,23 @@ async fn generate_soap_inner(
     // Post-process: strip markdown, fix paragraph formatting
     let soap_text = soap_generator::postprocess_soap(&raw_soap);
 
-    // Save context to recording metadata for future reference
-    if let Some(ctx) = context {
-        if !ctx.is_empty() {
-            if recording.metadata.is_null() {
-                recording.metadata = serde_json::json!({});
-            }
-            if let Some(obj) = recording.metadata.as_object_mut() {
+    // Save context to recording metadata for future reference.
+    if recording.metadata.is_null() {
+        recording.metadata = serde_json::json!({});
+    }
+    if let Some(obj) = recording.metadata.as_object_mut() {
+        if let Some(ctx) = context {
+            if !ctx.is_empty() {
                 obj.insert("context".to_string(), serde_json::Value::String(ctx.to_string()));
+            }
+        }
+        if let Some(pc) = patient_context {
+            if !patient_context_is_empty(pc) {
+                obj.insert(
+                    "patient_context".to_string(),
+                    serde_json::to_value(pc)
+                        .unwrap_or(serde_json::Value::Null),
+                );
             }
         }
     }

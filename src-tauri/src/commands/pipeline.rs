@@ -122,6 +122,7 @@ pub async fn process_recording(
         recording_id.clone(),
         template,
         context,
+        None,
     )
     .await;
 
