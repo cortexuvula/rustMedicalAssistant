@@ -124,7 +124,7 @@ impl SpeakerDiarizer {
         let frame_start: usize = 721;
 
         let mut is_speeching = false;
-        let mut offset = 0_usize;
+        let mut offset: usize;
         let mut start_offset = 0.0_f64;
         let mut segments = Vec::new();
 
