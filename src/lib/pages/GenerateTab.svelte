@@ -3,16 +3,19 @@
   import { generateSoap, generateReferral, generateLetter } from '../api/generation';
   import { generation } from '../stores/generation';
   import { copyToClipboard } from '../utils/clipboard';
+  import { splitLines } from '../utils/text';
   import GenerateItem from '../components/GenerateItem.svelte';
   import { rsvp } from '../stores/rsvp';
   import type { DocKind } from '../stores/rsvp';
+  import type { PatientContext } from '../types';
   import { formatError } from '../types/errors';
 
   let copyStatus = $state<Record<string, 'idle' | 'copying' | 'copied'>>({});
   let contextText = $state('');
+  let medicationsText = $state('');
+  let allergiesText = $state('');
+  let conditionsText = $state('');
   let contextExpanded = $state(false);
-  // Track which recording ID we last loaded context for, so we only
-  // overwrite user-typed context when the actual recording changes.
   let lastContextRecordingId = $state<string | null>(null);
 
   const CONTEXT_TEMPLATES = [
@@ -23,20 +26,36 @@
     { label: 'Referral Info', text: 'Referred by: \nReason for referral: \nRelevant history: \n\n' },
   ];
 
-  // Load saved context from recording metadata only when the recording ID changes.
-  // This prevents overwriting user-typed context when the store emits a refreshed
-  // copy of the same recording (e.g. after generation completes).
+  // Load saved context + structured fields from recording metadata only when
+  // the recording ID changes. Prevents overwriting user-typed values on the
+  // store-refresh that follows generation.
   $effect(() => {
     const rec = $selectedRecording;
     const currentId = rec?.id ?? null;
     if (currentId === lastContextRecordingId) return;
     lastContextRecordingId = currentId;
-    if (rec?.metadata && typeof rec.metadata === 'object' && rec.metadata.context) {
-      contextText = rec.metadata.context;
+    const meta = rec?.metadata;
+    if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+      contextText = typeof meta.context === 'string' ? meta.context : '';
+      const pc = meta.patient_context as PatientContext | undefined;
+      medicationsText = pc?.medications?.join('\n') ?? '';
+      allergiesText = pc?.allergies?.join('\n') ?? '';
+      conditionsText = pc?.conditions?.join('\n') ?? '';
     } else {
       contextText = '';
+      medicationsText = '';
+      allergiesText = '';
+      conditionsText = '';
     }
   });
+
+  // The Active badge lights up if ANY field has user input — derived state.
+  const hasActiveContext = $derived(
+    contextText.trim().length > 0 ||
+      medicationsText.trim().length > 0 ||
+      allergiesText.trim().length > 0 ||
+      conditionsText.trim().length > 0,
+  );
 
   function insertTemplate(text: string) {
     contextText = contextText ? contextText + '\n' + text : text;
@@ -74,23 +93,47 @@
     }
   }
 
+  /**
+   * Build a `PatientContext` payload from the three structured textareas.
+   * Returns `undefined` when every list is empty so the backend stores
+   * nothing and renders no Patient record block.
+   */
+  function buildPatientContext(): PatientContext | undefined {
+    const medications = splitLines(medicationsText);
+    const allergies = splitLines(allergiesText);
+    const conditions = splitLines(conditionsText);
+    if (medications.length === 0 && allergies.length === 0 && conditions.length === 0) {
+      return undefined;
+    }
+    return {
+      patient_name: null,
+      prior_soap_notes: [],
+      medications,
+      allergies,
+      conditions,
+    };
+  }
+
   async function handleGenerate(type: 'soap' | 'referral' | 'letter') {
     if (!$selectedRecording) return;
-    // Capture the recording ID upfront — $selectedRecording can change or
-    // become null during the awaits below if the user navigates away.
     const recordingId = $selectedRecording.id;
     generation.startGenerating(type);
     try {
       if (type === 'soap') {
         const ctx = contextText.trim() || undefined;
-        console.log('[GenerateTab] SOAP generate with context:', ctx ? `"${ctx.substring(0, 100)}..." (${ctx.length} chars)` : '(none)');
-        await generateSoap(recordingId, undefined, ctx);
+        const pc = buildPatientContext();
+        console.log(
+          '[GenerateTab] SOAP generate — context:',
+          ctx ? `"${ctx.substring(0, 80)}..." (${ctx.length} chars)` : '(none)',
+          ' patient_context:',
+          pc ? `meds=${pc.medications.length} allergies=${pc.allergies.length} conditions=${pc.conditions.length}` : '(none)',
+        );
+        await generateSoap(recordingId, undefined, ctx, pc);
       } else if (type === 'referral') {
         await generateReferral(recordingId);
       } else {
         await generateLetter(recordingId);
       }
-      // Refresh recording data and list in parallel
       await Promise.all([
         selectRecording(recordingId),
         recordings.load(),
@@ -124,7 +167,7 @@
         <button class="context-toggle" onclick={() => (contextExpanded = !contextExpanded)}>
           <span class="toggle-arrow">{contextExpanded ? '▾' : '▸'}</span>
           <span class="toggle-label">Additional Context</span>
-          {#if contextText.trim()}
+          {#if hasActiveContext}
             <span class="context-badge">Active</span>
           {/if}
         </button>
@@ -132,8 +175,37 @@
         {#if contextExpanded}
           <div class="context-body">
             <p class="context-hint">
-              Add previous visit notes, lab results, medications, or other context to improve SOAP note generation.
+              Add medications, allergies, and known conditions as structured lists below. Use the Notes textarea for everything else (lab values, prior visit narrative, family/social history, etc.).
             </p>
+
+            <label class="field-label" for="ctx-medications">Medications (one per line)</label>
+            <textarea
+              id="ctx-medications"
+              class="context-textarea structured"
+              placeholder="Lisinopril 10mg PO daily"
+              bind:value={medicationsText}
+              rows="3"
+            ></textarea>
+
+            <label class="field-label" for="ctx-allergies">Allergies (one per line)</label>
+            <textarea
+              id="ctx-allergies"
+              class="context-textarea structured"
+              placeholder="Penicillin (rash)"
+              bind:value={allergiesText}
+              rows="2"
+            ></textarea>
+
+            <label class="field-label" for="ctx-conditions">Known conditions (one per line)</label>
+            <textarea
+              id="ctx-conditions"
+              class="context-textarea structured"
+              placeholder="Type 2 diabetes"
+              bind:value={conditionsText}
+              rows="3"
+            ></textarea>
+
+            <label class="field-label" for="ctx-notes">Notes</label>
             <div class="context-templates">
               {#each CONTEXT_TEMPLATES as tmpl}
                 <button class="template-chip" onclick={() => insertTemplate(tmpl.text)}>
@@ -142,14 +214,15 @@
               {/each}
             </div>
             <textarea
+              id="ctx-notes"
               class="context-textarea"
-              placeholder="Enter additional context here (e.g., previous visit findings, current medications, lab results)..."
+              placeholder="Free-form notes (lab values, prior visit narrative, family/social history)..."
               bind:value={contextText}
               rows="6"
             ></textarea>
             {#if contextText.trim()}
               <button class="context-clear" onclick={() => (contextText = '')}>
-                Clear
+                Clear notes
               </button>
             {/if}
           </div>
@@ -369,6 +442,20 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     transition: border-color 0.15s ease;
+  }
+
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 4px;
+    margin-bottom: -4px;
+  }
+
+  .context-textarea.structured {
+    min-height: 56px;
   }
 
   .context-textarea::placeholder {
