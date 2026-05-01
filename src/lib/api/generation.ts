@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { PatientContext } from '../types';
 
 export async function generateSoap(
   recordingId: string,
   template?: string,
-  context?: string
+  context?: string,
+  patientContext?: PatientContext,
 ): Promise<string> {
   // Tauri omits undefined fields from the payload, so explicitly pass null
   // for optional parameters to ensure they map to Rust Option::None
@@ -11,6 +13,7 @@ export async function generateSoap(
     recordingId,
     template: template ?? null,
     context: context ?? null,
+    patientContext: patientContext ?? null,
   });
 }
 
