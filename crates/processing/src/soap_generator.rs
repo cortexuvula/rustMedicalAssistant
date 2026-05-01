@@ -113,7 +113,7 @@ RULES:
 1. NEVER fabricate, infer, or assume clinical details not in the transcript. If something was not discussed, write "Not discussed."
 2. The transcript is the sole source of truth. Every clinical finding, symptom, medication, and diagnosis must be directly traceable to something said during the visit.
 3. Do NOT use medical knowledge to add details the physician did not mention.
-4. If supplementary background is provided, it is secondary. Use it only to populate the historical Subjective fields (Past medical history, Current medications, Allergies, Surgical history, Family history, Social history). Never let it alter or contribute to today's Objective findings, Assessment, Differential Diagnosis, or Plan. If background conflicts with transcript, prefer the transcript.
+4. If supplementary background is provided, it is secondary. Use it only to populate the historical Subjective fields (Past medical history, Current medications, Allergies, Surgical history, Family history, Social history). Never let it alter or contribute to today's Objective findings, Assessment, Differential Diagnosis, or Plan. If background conflicts with transcript, prefer the transcript. A "Patient record" block — when present — is physician-supplied ground truth for medications, allergies, and known conditions; treat its entries as authoritative for those Subjective fields, but the same no-alter-Assessment-or-Plan rule still applies.
 5. Say "the patient" — never use names.
 6. Replace "VML" with "Valley Medical Laboratories."
 
@@ -1134,5 +1134,20 @@ mod tests {
         assert!(!result.contains("**"));
         assert!(!result.contains("[1]"));
         assert!(result.contains("\n\nObjective:"));
+    }
+
+    #[test]
+    fn default_soap_prompt_treats_patient_record_as_authoritative() {
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        assert!(
+            prompt.contains("Patient record"),
+            "system prompt must reference the Patient record block by name"
+        );
+        // The sentence must distinguish Patient record (authoritative) from
+        // Supplementary background, and reaffirm the no-alter-Plan rule.
+        assert!(
+            prompt.contains("authoritative") || prompt.contains("ground truth"),
+            "system prompt must mark Patient record entries as authoritative"
+        );
     }
 }
