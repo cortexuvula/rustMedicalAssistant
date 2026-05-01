@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use chrono::Utc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tracing::{info, instrument};
 use uuid::Uuid;
 
@@ -42,6 +42,24 @@ fn is_repeated_phrase_hallucination(text: &str) -> bool {
         return false;
     }
     segments.iter().all(|s| s == first)
+}
+
+/// Write an orphaned transcript (one whose DB persistence failed despite
+/// successful transcription) to a file inside `app_data_dir/orphaned_transcripts/`.
+/// Returns the full path so the caller can log it for manual recovery.
+///
+/// Lives inside the app data directory (same PHI boundary as the DB itself);
+/// avoids putting raw transcript text into the global tracing pipeline.
+fn persist_orphaned_transcript(
+    app_data_dir: &std::path::Path,
+    recording_id: &uuid::Uuid,
+    transcript: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    let dir = app_data_dir.join("orphaned_transcripts");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{recording_id}.txt"));
+    std::fs::write(&path, transcript)?;
+    Ok(path)
 }
 
 /// Compute the divisor used to normalize integer WAV samples to `[-1.0, 1.0]`.
@@ -436,11 +454,22 @@ pub async fn transcribe_recording_inner(
             let err_msg = format!(
                 "Transcription succeeded but failed to persist final status: {inner}"
             );
-            tracing::error!(
-                recording_id = %recording_for_failure.id,
-                transcript = %display_text,
-                "{err_msg} — logging transcript for manual recovery"
-            );
+            let dir = match app.path().app_data_dir() {
+                Ok(d) => d,
+                Err(_) => std::env::temp_dir(),
+            };
+            match persist_orphaned_transcript(&dir, &recording_for_failure.id, &display_text) {
+                Ok(path) => tracing::error!(
+                    recording_id = %recording_for_failure.id,
+                    orphaned_transcript_path = %path.display(),
+                    "{err_msg} — orphaned transcript written for manual recovery"
+                ),
+                Err(io_err) => tracing::error!(
+                    recording_id = %recording_for_failure.id,
+                    orphan_persist_error = %io_err,
+                    "{err_msg} — additionally failed to write orphaned transcript file"
+                ),
+            }
             return Err(AppError::Database(
                 mark_recording_failed(&app, &state.db, recording_for_failure, err_msg).await,
             ));
@@ -449,11 +478,22 @@ pub async fn transcribe_recording_inner(
             let err_msg = format!(
                 "Transcription succeeded but DB persist task panicked: {join_err}"
             );
-            tracing::error!(
-                recording_id = %recording_for_failure.id,
-                transcript = %display_text,
-                "{err_msg} — logging transcript for manual recovery"
-            );
+            let dir = match app.path().app_data_dir() {
+                Ok(d) => d,
+                Err(_) => std::env::temp_dir(),
+            };
+            match persist_orphaned_transcript(&dir, &recording_for_failure.id, &display_text) {
+                Ok(path) => tracing::error!(
+                    recording_id = %recording_for_failure.id,
+                    orphaned_transcript_path = %path.display(),
+                    "{err_msg} — orphaned transcript written for manual recovery"
+                ),
+                Err(io_err) => tracing::error!(
+                    recording_id = %recording_for_failure.id,
+                    orphan_persist_error = %io_err,
+                    "{err_msg} — additionally failed to write orphaned transcript file"
+                ),
+            }
             return Err(AppError::Other(
                 mark_recording_failed(&app, &state.db, recording_for_failure, err_msg).await,
             ));
@@ -546,6 +586,7 @@ pub async fn list_stt_providers(
 mod tests {
     use super::compute_int_max_val;
     use super::is_repeated_phrase_hallucination;
+    use super::persist_orphaned_transcript;
 
     use chrono::Utc;
     use medical_core::types::recording::{ProcessingStatus, Recording};
@@ -655,5 +696,36 @@ mod tests {
         assert_eq!(compute_int_max_val(16).unwrap(), 32_768.0);
         assert_eq!(compute_int_max_val(24).unwrap(), 8_388_608.0);
         assert_eq!(compute_int_max_val(32).unwrap(), 2_147_483_648.0);
+    }
+
+    #[test]
+    fn persist_orphaned_transcript_writes_file_in_subdir() {
+        use std::fs;
+        use uuid::Uuid;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let id = Uuid::new_v4();
+        let transcript = "patient says hello";
+
+        let path = persist_orphaned_transcript(tmp.path(), &id, transcript)
+            .expect("persist");
+
+        assert!(path.starts_with(tmp.path().join("orphaned_transcripts")));
+        assert_eq!(path.file_name().unwrap().to_string_lossy(), format!("{id}.txt"));
+        let on_disk = fs::read_to_string(&path).expect("read");
+        assert_eq!(on_disk, transcript);
+    }
+
+    #[test]
+    fn persist_orphaned_transcript_creates_subdir_if_missing() {
+        use uuid::Uuid;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let id = Uuid::new_v4();
+
+        // Subdir doesn't exist yet
+        assert!(!tmp.path().join("orphaned_transcripts").exists());
+
+        persist_orphaned_transcript(tmp.path(), &id, "x").expect("persist");
+
+        assert!(tmp.path().join("orphaned_transcripts").is_dir());
     }
 }
