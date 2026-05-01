@@ -18,6 +18,12 @@ pub trait SttProvider: Send + Sync {
     fn supports_diarization(&self) -> bool;
 
     /// Transcribe a complete audio buffer and return the full transcript.
+    ///
+    /// `cancel`: when the token fires, the provider should return `AppError::Cancelled`
+    /// as promptly as possible. Implementations differ in how interruptible they are:
+    /// remote providers cancel in-flight HTTP via `tokio::select!`; local providers
+    /// check the token before/after the blocking model invocation but cannot
+    /// interrupt it mid-pass.
     async fn transcribe(
         &self,
         audio: AudioData,

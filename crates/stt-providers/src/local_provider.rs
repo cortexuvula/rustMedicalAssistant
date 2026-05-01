@@ -62,8 +62,16 @@ impl SttProvider for LocalSttProvider {
         &self,
         audio: AudioData,
         config: SttConfig,
-        _cancel: CancellationToken,
+        cancel: CancellationToken,
     ) -> AppResult<Transcript> {
+        // Pre-check: bail immediately if the caller already cancelled.
+        // whisper-rs running inside spawn_blocking is not interruptible
+        // mid-pass without callback plumbing (out of scope), so the best we
+        // can do is check before/after the blocking model invocation.
+        if cancel.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+
         if !self.whisper_model_path.exists() {
             return Err(AppError::SttProvider(format!(
                 "Whisper model not found at {}. Download a model in Settings → Audio / STT.",
@@ -88,6 +96,13 @@ impl SttProvider for LocalSttProvider {
         .await
         .map_err(|e| AppError::SttProvider(format!("Whisper task panicked: {e}")))?
         ?;
+
+        // Post-check: if the user cancelled while whisper was running,
+        // discard the transcript rather than continuing into diarization
+        // and segment merging.
+        if cancel.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
 
         // Stage 3: Speaker diarization (optional, currently stubbed)
         let speaker_turns = if config.diarize && self.supports_diarization() {
@@ -157,5 +172,54 @@ impl SttProvider for LocalSttProvider {
         Err(AppError::SttProvider(
             "Local provider does not support streaming transcription".to_owned(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use medical_core::types::{AudioData, SttConfig};
+    use std::path::PathBuf;
+    use tokio_util::sync::CancellationToken;
+
+    fn dummy_audio() -> AudioData {
+        // 1 second of silent 16 kHz mono f32.
+        AudioData {
+            samples: vec![0.0_f32; 16_000],
+            sample_rate: 16_000,
+            channels: 1,
+        }
+    }
+
+    /// Build a LocalSttProvider pointing at non-existent model paths.
+    /// Suitable for tests that exercise pre-model-load behavior (e.g. cancellation).
+    fn local_provider_for_test() -> LocalSttProvider {
+        LocalSttProvider::new(
+            PathBuf::from("/nonexistent/whisper-model.bin"),
+            PathBuf::from("/nonexistent/segmentation.onnx"),
+            PathBuf::from("/nonexistent/embedding.onnx"),
+        )
+    }
+
+    #[tokio::test]
+    async fn transcribe_returns_cancelled_immediately_when_token_pre_cancelled() {
+        // The local provider can't interrupt whisper-rs once it's running, but
+        // it should bail immediately if the token is already cancelled when
+        // transcribe is called.
+        let provider = local_provider_for_test();
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // pre-cancelled
+
+        let result = provider
+            .transcribe(dummy_audio(), SttConfig::default(), cancel)
+            .await;
+
+        assert!(result.is_err(), "expected Err on pre-cancelled token");
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("cancel"),
+            "expected error to mention cancel, got: {msg}"
+        );
     }
 }
