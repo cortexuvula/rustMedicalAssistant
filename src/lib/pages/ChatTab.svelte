@@ -15,7 +15,7 @@
 
   // Scroll to bottom whenever messages change
   $effect(() => {
-    const _ = $chat.length;
+    $chat.length;
     scrollToBottom();
   });
 
