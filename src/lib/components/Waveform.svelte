@@ -56,7 +56,7 @@
   }
 
   $effect(() => {
-    const _ = $audio.waveformData;
+    $audio.waveformData;
     draw();
   });
 
