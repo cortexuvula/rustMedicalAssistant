@@ -15,10 +15,21 @@
   import { toasts } from '../stores/toasts';
   import { rsvp } from '../stores/rsvp';
   import { formatError } from '../types/errors';
+  import { buildPatientContext } from '../utils/patient_context';
 
   // Context panel state
   let contextText = $state('');
+  let medicationsText = $state('');
+  let allergiesText = $state('');
+  let conditionsText = $state('');
   let contextCollapsed = $state(true);
+
+  const hasActiveContext = $derived(
+    contextText.trim().length > 0 ||
+      medicationsText.trim().length > 0 ||
+      allergiesText.trim().length > 0 ||
+      conditionsText.trim().length > 0,
+  );
 
   // Template picker state
   let selectedTemplate = $state('');
@@ -157,7 +168,7 @@
     } catch (_e) {
       // If the silence check itself fails, don't block the pipeline.
     }
-    pipeline.launch(recordingId, contextText || undefined);
+    pipeline.launch(recordingId, contextText || undefined, undefined, buildPatientContext(medicationsText, allergiesText, conditionsText));
   }
 
   async function warnIfSilent(recordingId: string) {
@@ -179,7 +190,7 @@
     silenceDialogRecordingId = null;
     if (id) {
       pipelineRecordingId = id;
-      pipeline.launch(id, contextText || undefined);
+      pipeline.launch(id, contextText || undefined, undefined, buildPatientContext(medicationsText, allergiesText, conditionsText));
     }
   }
 
@@ -212,7 +223,7 @@
 
   function handleRetry() {
     if (!pipelineRecordingId) return;
-    pipeline.retry(pipelineRecordingId, contextText || undefined);
+    pipeline.retry(pipelineRecordingId, contextText || undefined, undefined, buildPatientContext(medicationsText, allergiesText, conditionsText));
   }
 
   function handleCancelPipeline() {
@@ -288,9 +299,41 @@
     <button class="context-toggle" onclick={() => (contextCollapsed = !contextCollapsed)}>
       <span class="toggle-arrow">{contextCollapsed ? '▶' : '▼'}</span>
       Patient Context
-      <span class="context-hint">(optional)</span>
+      {#if hasActiveContext}
+        <span class="context-badge">Active</span>
+      {:else}
+        <span class="context-hint">(optional)</span>
+      {/if}
     </button>
     {#if !contextCollapsed}
+      <label class="field-label" for="rt-medications">Medications (one per line)</label>
+      <textarea
+        id="rt-medications"
+        class="context-textarea structured"
+        placeholder="Lisinopril 10mg PO daily"
+        bind:value={medicationsText}
+        rows="3"
+      ></textarea>
+
+      <label class="field-label" for="rt-allergies">Allergies (one per line)</label>
+      <textarea
+        id="rt-allergies"
+        class="context-textarea structured"
+        placeholder="Penicillin (rash)"
+        bind:value={allergiesText}
+        rows="2"
+      ></textarea>
+
+      <label class="field-label" for="rt-conditions">Known conditions (one per line)</label>
+      <textarea
+        id="rt-conditions"
+        class="context-textarea structured"
+        placeholder="Type 2 diabetes"
+        bind:value={conditionsText}
+        rows="3"
+      ></textarea>
+
+      <label class="field-label" for="rt-notes">Notes</label>
       <div class="template-toolbar">
         <select
           class="template-picker"
@@ -315,6 +358,7 @@
         </button>
       </div>
       <textarea
+        id="rt-notes"
         class="context-textarea"
         placeholder="Paste chart notes, medications, history..."
         bind:value={contextText}
@@ -587,6 +631,34 @@
     resize: vertical;
     min-height: 80px;
     max-height: 200px;
+  }
+
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 8px;
+    margin-bottom: 4px;
+    display: block;
+  }
+
+  .context-textarea.structured {
+    min-height: 56px;
+  }
+
+  .context-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    margin-left: 6px;
   }
 
   .context-textarea:focus {
