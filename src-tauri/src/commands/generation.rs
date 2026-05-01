@@ -213,7 +213,7 @@ fn build_completion_request(
 ///
 /// Total character budget reuses `MAX_CONTEXT_CHARS` for symmetry with
 /// the freeform-context cap, which already exists for the same purpose.
-fn validate_patient_context(pc: &PatientContext) -> AppResult<()> {
+pub(super) fn validate_patient_context(pc: &PatientContext) -> AppResult<()> {
     let lists: [(&str, &[String]); 3] = [
         ("medications", &pc.medications),
         ("allergies", &pc.allergies),

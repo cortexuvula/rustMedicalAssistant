@@ -9,6 +9,7 @@ use tracing::{info, error, instrument, warn};
 use uuid::Uuid;
 
 use medical_core::error::{AppError, AppResult};
+use medical_core::types::PatientContext;
 use medical_db::recordings::RecordingsRepo;
 
 use crate::state::AppState;
@@ -33,12 +34,19 @@ pub async fn process_recording(
     recording_id: String,
     context: Option<String>,
     template: Option<String>,
+    patient_context: Option<PatientContext>,
 ) -> AppResult<String> {
     info!(
         has_context = context.is_some(),
+        has_patient_context = patient_context.is_some(),
         template = template.as_deref().unwrap_or("default"),
         "Pipeline started: transcribe → SOAP"
     );
+
+    if let Some(ref pc) = patient_context {
+        super::generation::validate_patient_context(pc)?;
+    }
+
     let rid = recording_id.clone();
 
     // Register a cancel token so the frontend can ask us to bail between
@@ -123,7 +131,7 @@ pub async fn process_recording(
         recording_id.clone(),
         template,
         context,
-        None,
+        patient_context,
     )
     .await;
 
@@ -226,5 +234,32 @@ pub fn cancel_pipeline(
         Ok(true)
     } else {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use medical_core::types::PatientContext;
+
+    /// Tests at the call-site level: process_recording must invoke
+    /// validate_patient_context and surface its Err for an oversized payload.
+    /// The validator's own behavior is covered in commands::generation::tests.
+    #[test]
+    fn validate_patient_context_call_rejects_oversized_item() {
+        let long = "y".repeat(501);
+        let pc = PatientContext {
+            patient_name: None,
+            prior_soap_notes: vec![],
+            medications: vec![long],
+            allergies: vec![],
+            conditions: vec![],
+        };
+        let result = super::super::generation::validate_patient_context(&pc);
+        assert!(result.is_err(), "expected Err on 501-char medication");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.to_lowercase().contains("too long") || msg.contains("500"),
+            "expected too-long error, got: {msg}"
+        );
     }
 }
