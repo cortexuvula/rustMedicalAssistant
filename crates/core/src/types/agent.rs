@@ -48,12 +48,21 @@ pub struct AgentContext {
 }
 
 /// A snapshot of patient-specific context for grounding agent responses.
+///
+/// Frontend payloads from the SOAP generation flow may omit `patient_name`
+/// and `prior_soap_notes` (those fields aren't surfaced in the UI today);
+/// `#[serde(default)]` keeps deserialization forgiving.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatientContext {
+    #[serde(default)]
     pub patient_name: Option<String>,
+    #[serde(default)]
     pub prior_soap_notes: Vec<String>,
+    #[serde(default)]
     pub medications: Vec<String>,
+    #[serde(default)]
     pub conditions: Vec<String>,
+    #[serde(default)]
     pub allergies: Vec<String>,
 }
 
@@ -135,5 +144,19 @@ mod tests {
         let back: ToolOutput = serde_json::from_str(&json).unwrap();
         assert_eq!(back.content, "result data");
         assert!(!back.is_error);
+    }
+
+    #[test]
+    fn patient_context_deserializes_from_partial_payload() {
+        // The frontend may send only the three structured fields. The two
+        // unused fields (patient_name, prior_soap_notes) must default to
+        // None / empty vec rather than erroring.
+        let json = r#"{"medications":["A"],"conditions":["B"],"allergies":["C"]}"#;
+        let parsed: PatientContext = serde_json::from_str(json).expect("parse");
+        assert_eq!(parsed.medications, vec!["A"]);
+        assert_eq!(parsed.conditions, vec!["B"]);
+        assert_eq!(parsed.allergies, vec!["C"]);
+        assert!(parsed.patient_name.is_none());
+        assert!(parsed.prior_soap_notes.is_empty());
     }
 }
