@@ -122,9 +122,10 @@
         const ctx = contextText.trim() || undefined;
         const pc = buildPatientContext();
         console.log(
-          '[GenerateTab] SOAP generate — context:',
-          ctx ? `"${ctx.substring(0, 80)}..." (${ctx.length} chars)` : '(none)',
-          ' patient_context:',
+          '[GenerateTab] SOAP generate —',
+          'context:',
+          ctx ? `${ctx.length} chars` : '(none)',
+          'patient_context:',
           pc ? `meds=${pc.medications.length} allergies=${pc.allergies.length} conditions=${pc.conditions.length}` : '(none)',
         );
         await generateSoap(recordingId, undefined, ctx, pc);
