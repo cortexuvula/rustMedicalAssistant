@@ -12,7 +12,7 @@ interface GenerationState {
 }
 
 function createGenerationStore() {
-  const { subscribe, update, set } = writable<GenerationState>({
+  const { subscribe, update } = writable<GenerationState>({
     generating: null,
     progressStatus: null,
     error: null,
