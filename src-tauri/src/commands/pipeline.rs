@@ -1,10 +1,10 @@
 //! Background pipeline: transcribe → generate SOAP in one command.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::Emitter;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, error, instrument, warn};
 use uuid::Uuid;
 
@@ -41,11 +41,12 @@ pub async fn process_recording(
     );
     let rid = recording_id.clone();
 
-    // Register a cancel flag so the frontend can ask us to bail between stages.
-    let cancel = Arc::new(AtomicBool::new(false));
+    // Register a cancel token so the frontend can ask us to bail between
+    // stages and interrupt in-flight provider work.
+    let cancel = CancellationToken::new();
     {
         let mut guard = state.pipeline_cancels.lock().unwrap();
-        guard.insert(recording_id.clone(), Arc::clone(&cancel));
+        guard.insert(recording_id.clone(), cancel.clone());
     }
     // Ensure the flag is removed on every exit path.
     let _cancel_guard = CancelGuard {
@@ -91,7 +92,7 @@ pub async fn process_recording(
         recording_id.clone(),
         None,       // language — use default
         Some(true), // diarize — medical encounters are multi-speaker
-        Some(&cancel),
+        Some(cancel.clone()),
     )
     .await;
 
@@ -106,7 +107,7 @@ pub async fn process_recording(
 
     info!("Pipeline stage 1 complete: transcription succeeded");
 
-    if cancel.load(Ordering::SeqCst) {
+    if cancel.is_cancelled() {
         let msg = "Pipeline cancelled by user after transcription".to_string();
         warn!("{msg}");
         emit_progress(&app, &rid, "failed", Some(msg.clone()));
@@ -182,10 +183,10 @@ async fn get_recording_display_name(state: &AppState, recording_id: &str) -> Str
     .unwrap_or_else(|| "Recording".to_string())
 }
 
-/// RAII helper: remove the cancel flag from the map when the pipeline exits
+/// RAII helper: remove the cancel token from the map when the pipeline exits
 /// (success, error, or panic unwind) so we don't leak entries.
 struct CancelGuard {
-    cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
+    cancels: Arc<std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>>,
     key: String,
 }
 
@@ -212,8 +213,8 @@ pub fn cancel_pipeline(
         .pipeline_cancels
         .lock()
         .map_err(|_| AppError::Other("pipeline_cancels mutex poisoned".to_string()))?;
-    if let Some(flag) = guard.get(&recording_id) {
-        flag.store(true, Ordering::SeqCst);
+    if let Some(token) = guard.get(&recording_id) {
+        token.cancel();
         info!(recording_id = %recording_id, "Pipeline cancel requested");
         Ok(true)
     } else {

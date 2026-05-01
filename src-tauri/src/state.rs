@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use medical_ai_providers::ollama::OllamaProvider;
@@ -88,10 +88,11 @@ pub struct AppState {
     pub orchestrator: Arc<AgentOrchestrator>,
     pub capture_handle: Arc<std::sync::Mutex<SendCaptureHandle>>,
     pub current_recording: Arc<std::sync::Mutex<Option<CurrentRecording>>>,
-    /// Cancel flags for in-flight pipelines, keyed by recording id. The
-    /// pipeline inserts its own flag on entry and removes it on exit;
-    /// `cancel_pipeline` flips a flag to signal the poll points to bail out.
-    pub pipeline_cancels: Arc<std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    /// Cancel tokens for in-flight pipelines, keyed by recording id. The
+    /// pipeline inserts its own token on entry and removes it on exit;
+    /// `cancel_pipeline` calls `.cancel()` to signal in-flight tasks and
+    /// poll points to bail out.
+    pub pipeline_cancels: Arc<std::sync::Mutex<HashMap<String, CancellationToken>>>,
     // RAG subsystem
     pub embedding_generator: Arc<EmbeddingGenerator>,
     pub vector_store: Arc<VectorStore>,

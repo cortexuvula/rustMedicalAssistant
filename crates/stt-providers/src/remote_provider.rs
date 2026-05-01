@@ -15,6 +15,7 @@ use reqwest::{
     multipart::{Form, Part},
 };
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use medical_core::error::{AppError, AppResult};
@@ -175,7 +176,12 @@ impl SttProvider for RemoteSttProvider {
         self.diarization_available()
     }
 
-    async fn transcribe(&self, audio: AudioData, config: SttConfig) -> AppResult<Transcript> {
+    async fn transcribe(
+        &self,
+        audio: AudioData,
+        config: SttConfig,
+        _cancel: CancellationToken,
+    ) -> AppResult<Transcript> {
         let duration = audio.duration_seconds();
 
         // Stage 1: resample to 16 kHz mono f32, then convert to i16 for upload.
@@ -339,6 +345,7 @@ mod tests {
             .transcribe(
                 dummy_audio(),
                 SttConfig { language: Some("en".into()), diarize: false, ..SttConfig::default() },
+                CancellationToken::new(),
             )
             .await
             .expect("transcribe");
@@ -361,7 +368,7 @@ mod tests {
 
         let provider = provider_at(&server.uri(), Some("sk-test".into()));
         let res = provider
-            .transcribe(dummy_audio(), SttConfig::default())
+            .transcribe(dummy_audio(), SttConfig::default(), CancellationToken::new())
             .await;
         assert!(res.is_ok(), "expected ok, got: {res:?}");
     }
@@ -385,7 +392,7 @@ mod tests {
 
         let provider = provider_at(&server.uri(), None);
         let res = provider
-            .transcribe(dummy_audio(), SttConfig::default())
+            .transcribe(dummy_audio(), SttConfig::default(), CancellationToken::new())
             .await;
         assert!(res.is_ok(), "should not send Authorization without key");
     }
@@ -401,7 +408,7 @@ mod tests {
 
         let provider = provider_at(&server.uri(), Some("bad".into()));
         let err = provider
-            .transcribe(dummy_audio(), SttConfig::default())
+            .transcribe(dummy_audio(), SttConfig::default(), CancellationToken::new())
             .await
             .unwrap_err()
             .to_string();
@@ -422,7 +429,7 @@ mod tests {
 
         let provider = provider_at(&server.uri(), None);
         let err = provider
-            .transcribe(dummy_audio(), SttConfig::default())
+            .transcribe(dummy_audio(), SttConfig::default(), CancellationToken::new())
             .await
             .unwrap_err()
             .to_string();
@@ -443,7 +450,7 @@ mod tests {
 
         let provider = provider_at(&server.uri(), None);
         let err = provider
-            .transcribe(dummy_audio(), SttConfig::default())
+            .transcribe(dummy_audio(), SttConfig::default(), CancellationToken::new())
             .await
             .unwrap_err()
             .to_string();
@@ -485,7 +492,7 @@ mod tests {
 
         let provider = provider_at(&server.uri(), None);
         let transcript = provider
-            .transcribe(dummy_audio(), SttConfig::default())
+            .transcribe(dummy_audio(), SttConfig::default(), CancellationToken::new())
             .await
             .expect("transcribe");
         assert_eq!(transcript.segments.len(), 1, "empty/missing text segments must be filtered");

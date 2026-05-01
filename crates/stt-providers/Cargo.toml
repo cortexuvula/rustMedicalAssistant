@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 medical-core = { path = "../core" }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

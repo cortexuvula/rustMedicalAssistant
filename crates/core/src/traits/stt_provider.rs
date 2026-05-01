@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use futures_core::Stream;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::AppResult;
 use crate::types::{AudioData, AudioStream, SttConfig, Transcript, TranscriptChunk};
@@ -17,7 +18,12 @@ pub trait SttProvider: Send + Sync {
     fn supports_diarization(&self) -> bool;
 
     /// Transcribe a complete audio buffer and return the full transcript.
-    async fn transcribe(&self, audio: AudioData, config: SttConfig) -> AppResult<Transcript>;
+    async fn transcribe(
+        &self,
+        audio: AudioData,
+        config: SttConfig,
+        cancel: CancellationToken,
+    ) -> AppResult<Transcript>;
 
     /// Transcribe a live audio stream, yielding chunks as they are recognized.
     async fn transcribe_stream(

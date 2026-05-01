@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use futures_core::Stream;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use medical_core::error::{AppError, AppResult};
@@ -57,7 +58,12 @@ impl SttProvider for LocalSttProvider {
         self.segmentation_model_path.exists() && self.embedding_model_path.exists()
     }
 
-    async fn transcribe(&self, audio: AudioData, config: SttConfig) -> AppResult<Transcript> {
+    async fn transcribe(
+        &self,
+        audio: AudioData,
+        config: SttConfig,
+        _cancel: CancellationToken,
+    ) -> AppResult<Transcript> {
         if !self.whisper_model_path.exists() {
             return Err(AppError::SttProvider(format!(
                 "Whisper model not found at {}. Download a model in Settings → Audio / STT.",
