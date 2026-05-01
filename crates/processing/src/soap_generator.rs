@@ -112,7 +112,7 @@ RULES:
 1. NEVER fabricate, infer, or assume clinical details not in the transcript. If something was not discussed, write "Not discussed."
 2. The transcript is the sole source of truth. Every clinical finding, symptom, medication, and diagnosis must be directly traceable to something said during the visit.
 3. Do NOT use medical knowledge to add details the physician did not mention.
-4. If supplementary background is provided, it is secondary. Use it only for past history context. Never let it override the transcript. If context conflicts with transcript, prefer the transcript. Conditions or medications from background only (not transcript) go under past history only, never in Assessment or Plan.
+4. If supplementary background is provided, it is secondary. Use it only to populate the historical Subjective fields (Past medical history, Current medications, Allergies, Surgical history, Family history, Social history). Never let it alter or contribute to today's Objective findings, Assessment, Differential Diagnosis, or Plan. If background conflicts with transcript, prefer the transcript.
 5. Say "the patient" — never use names.
 6. Replace "VML" with "Valley Medical Laboratories."
 
@@ -248,12 +248,12 @@ Subjective:
 - Chief complaint: [from transcript]
 - History of present illness: [from transcript]
 - Past medical history: [from transcript or explicit background; otherwise "Not discussed"]
-- Surgical history: [from transcript; otherwise "Not discussed"]
+- Surgical history: [from transcript or explicit background; otherwise "Not discussed"]
 - Current medications:
-  - [each medication on its own line; if none stated, write "Not discussed"]
-- Allergies: [from transcript; otherwise "Not discussed"]
-- Family history: [from transcript; otherwise "Not discussed"]
-- Social history: [from transcript; otherwise "Not discussed"]
+  - [each medication on its own line, drawn from transcript or explicit background; if none stated in either, write "Not discussed"]
+- Allergies: [from transcript or explicit background; otherwise "Not discussed"]
+- Family history: [from transcript or explicit background; otherwise "Not discussed"]
+- Social history: [from transcript or explicit background; otherwise "Not discussed"]
 - Review of systems: [from transcript; otherwise "Not performed"]
 
 Objective:
@@ -293,7 +293,7 @@ SELF-CHECK BEFORE OUTPUT — for every line you produced, locate the transcript 
 
 1. Demographics check: any line stating age, sex, gender, race, or occupation must have a transcript quote. If absent, remove the detail.
 2. Past medical history check: every PMH item must have a transcript quote (or be drawn from explicitly provided background context). If neither, write "Not discussed."
-3. Medication check: drug name, dose, frequency, and route — every element must be stated in the transcript. If only the drug was named, write the drug name with "dose not specified." Do not invent a canonical dose.
+3. Medication check: drug name, dose, frequency, and route — every element must be stated in the transcript or supplied background. If only the drug was named, write the drug name with "dose not specified." Do not invent a canonical dose. Medications supplied via background but not mentioned in the transcript are still listed under Current medications.
 4. Referral check: any specific provider name must have a transcript quote. If only the specialty was discussed, name the specialty only. If no referral was discussed, do not include a referral line.
 5. Follow-up interval check: any duration ("in 3 months", "in 2 weeks") must have a transcript quote. If absent, write "Follow-up timing not specified."
 6. Red-flag check: any "seek urgent care for X" warning must have a transcript quote. If absent, remove the line.
@@ -845,6 +845,66 @@ mod tests {
         assert!(prompt.contains("Time"));
         assert!(prompt.contains("Date"));
         assert!(prompt.contains("patient says hello"));
+    }
+
+    #[test]
+    fn current_medications_format_allows_supplementary_background() {
+        // Regression: physicians supply current medications via the
+        // "Additional Context" panel when they aren't restated in the visit
+        // transcript. The output-format spec for "Current medications" must
+        // tell the model that background is a valid source — otherwise the
+        // model writes "Not discussed" and silently drops user-entered meds.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        let format_idx = prompt
+            .find("OUTPUT FORMAT")
+            .expect("OUTPUT FORMAT section missing");
+        let format_block = &prompt[format_idx..];
+        let meds_idx = format_block
+            .find("Current medications:")
+            .expect("Current medications section missing in OUTPUT FORMAT");
+        let meds_block = &format_block[meds_idx..meds_idx + 400];
+        assert!(
+            meds_block.contains("background"),
+            "Current medications output format must allow supplementary background as a source.\nBlock:\n{meds_block}"
+        );
+    }
+
+    #[test]
+    fn historical_subjective_fields_allow_supplementary_background() {
+        // Allergies, family history, and social history are also historical
+        // facts the physician may supply via background context. The format
+        // must allow background sourcing for all of them, not just PMH.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        let format_idx = prompt
+            .find("OUTPUT FORMAT")
+            .expect("OUTPUT FORMAT section missing");
+        let format_block = &prompt[format_idx..];
+        for field in ["Allergies:", "Family history:", "Social history:"] {
+            let idx = format_block
+                .find(field)
+                .unwrap_or_else(|| panic!("{field} section missing in OUTPUT FORMAT"));
+            let block = &format_block[idx..idx + 200];
+            assert!(
+                block.contains("background"),
+                "{field} output format must allow supplementary background as a source.\nBlock:\n{block}"
+            );
+        }
+    }
+
+    #[test]
+    fn medication_self_check_allows_supplementary_background() {
+        // Self-check rule #3 previously required medication elements to be
+        // "stated in the transcript", which contradicts Rule #4 and causes
+        // the model to drop background-supplied medications.
+        let prompt = build_soap_prompt(&SoapPromptConfig::default());
+        let idx = prompt
+            .find("Medication check")
+            .expect("Medication self-check entry missing");
+        let block = &prompt[idx..idx + 400];
+        assert!(
+            block.contains("background"),
+            "Medication self-check must acknowledge supplied background as a valid source.\nBlock:\n{block}"
+        );
     }
 
     #[test]
