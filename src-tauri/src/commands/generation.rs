@@ -10,7 +10,7 @@ use uuid::Uuid;
 use medical_core::error::{AppError, AppResult};
 use medical_core::traits::AiProvider;
 use medical_core::types::recording::Recording;
-use medical_core::types::{CompletionRequest, Message, MessageContent, Role};
+use medical_core::types::{CompletionRequest, Message, MessageContent, PatientContext, Role};
 use medical_db::recordings::RecordingsRepo;
 use medical_processing::document_generator;
 use medical_processing::soap_generator::{self, SoapPromptConfig};
@@ -26,6 +26,15 @@ use crate::state::AppState;
 /// Prevents pasting multi-megabyte documents that would blow past provider
 /// token limits or cause excessive memory usage.
 const MAX_CONTEXT_CHARS: usize = 50_000;
+
+/// Per-list item count cap on `PatientContext`. Generous against realistic
+/// clinical input; exists to reject pathological payloads.
+const PATIENT_CTX_MAX_ITEMS_PER_LIST: usize = 50;
+
+/// Per-item character cap on `PatientContext` entries. A single med string
+/// like "Lisinopril 10mg PO daily once in the morning with food" is well
+/// under this; an entry over 500 chars is malformed input.
+const PATIENT_CTX_MAX_ITEM_CHARS: usize = 500;
 
 /// Maximum size of a recording transcript we will send to a provider.
 /// A 2-hour transcript at ~150 wpm is ~180k chars; 500k gives comfortable
@@ -196,6 +205,49 @@ fn build_completion_request(
         max_tokens,
         system_prompt: Some(system_prompt),
     }
+}
+
+/// Validate a structured `PatientContext` against the per-list and per-item
+/// caps. The caps protect against pathological input (e.g. a 50K paste into
+/// a single med field) and total-payload bloat.
+///
+/// Total character budget reuses `MAX_CONTEXT_CHARS` for symmetry with
+/// the freeform-context cap, which already exists for the same purpose.
+fn validate_patient_context(pc: &PatientContext) -> AppResult<()> {
+    let lists: [(&str, &[String]); 3] = [
+        ("medications", &pc.medications),
+        ("allergies", &pc.allergies),
+        ("conditions", &pc.conditions),
+    ];
+
+    let mut total: usize = 0;
+    for (label, items) in lists {
+        if items.len() > PATIENT_CTX_MAX_ITEMS_PER_LIST {
+            return Err(AppError::Other(format!(
+                "Too many {label} entries: {} (limit is {})",
+                items.len(),
+                PATIENT_CTX_MAX_ITEMS_PER_LIST
+            )));
+        }
+        for item in items {
+            if item.len() > PATIENT_CTX_MAX_ITEM_CHARS {
+                return Err(AppError::Other(format!(
+                    "Patient context entry too long in {label}: {} chars (limit is {})",
+                    item.len(),
+                    PATIENT_CTX_MAX_ITEM_CHARS
+                )));
+            }
+            total += item.len();
+        }
+    }
+
+    if total > MAX_CONTEXT_CHARS {
+        return Err(AppError::Other(format!(
+            "Patient context too large: {total} chars (limit is {MAX_CONTEXT_CHARS})"
+        )));
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -683,4 +735,80 @@ pub async fn generate_synopsis(
     persist_recording(&state.db, recording).await?;
 
     Ok(synopsis_text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use medical_core::types::PatientContext;
+
+    fn pc(meds: &[&str], allergies: &[&str], conditions: &[&str]) -> PatientContext {
+        PatientContext {
+            patient_name: None,
+            prior_soap_notes: vec![],
+            medications: meds.iter().map(|s| (*s).to_string()).collect(),
+            allergies: allergies.iter().map(|s| (*s).to_string()).collect(),
+            conditions: conditions.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn validate_patient_context_accepts_normal_payload() {
+        let ctx = pc(
+            &["Lisinopril 10mg daily", "Metformin 500mg BID"],
+            &["Penicillin"],
+            &["HTN", "T2DM"],
+        );
+        assert!(validate_patient_context(&ctx).is_ok());
+    }
+
+    #[test]
+    fn validate_patient_context_accepts_all_empty() {
+        let ctx = pc(&[], &[], &[]);
+        assert!(validate_patient_context(&ctx).is_ok());
+    }
+
+    #[test]
+    fn validate_patient_context_rejects_total_too_large() {
+        // Each item is exactly at the per-item cap (500 chars) so it does not
+        // trip the per-item check; lists are at the per-list cap (50) so the
+        // count check also passes. Total = 50*500 + 50*500 + 1*500 = 50_500,
+        // which exceeds MAX_CONTEXT_CHARS (50_000) by 500 — so only the
+        // total-cap check should fire.
+        let big = "x".repeat(500);
+        let fifty: Vec<&str> = std::iter::repeat(big.as_str()).take(50).collect();
+        let mut ctx = pc(&fifty, &fifty, &[]);
+        ctx.conditions.push(big.clone());
+        let err = validate_patient_context(&ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("too large"),
+            "expected 'too large' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_patient_context_rejects_too_many_items() {
+        let many: Vec<String> = (0..51).map(|i| format!("med-{i}")).collect();
+        let many_refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        let ctx = pc(&many_refs, &[], &[]);
+        let err = validate_patient_context(&ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("too many") || msg.contains("50"),
+            "expected too-many error: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_patient_context_rejects_item_too_long() {
+        let long = "y".repeat(501);
+        let ctx = pc(&[long.as_str()], &[], &[]);
+        let err = validate_patient_context(&ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("too long") || msg.contains("500"),
+            "expected too-long error: {msg}"
+        );
+    }
 }
