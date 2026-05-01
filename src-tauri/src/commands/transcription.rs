@@ -44,6 +44,21 @@ fn is_repeated_phrase_hallucination(text: &str) -> bool {
     segments.iter().all(|s| s == first)
 }
 
+/// Compute the divisor used to normalize integer WAV samples to `[-1.0, 1.0]`.
+///
+/// Returns an error for `bits_per_sample == 0`, which would otherwise
+/// trigger a shift-overflow panic in `1 << (bps - 1)` on debug builds and
+/// a wrap-then-shift-overflow on release. Such a WAV is malformed; reject
+/// it rather than crash the app.
+fn compute_int_max_val(bits_per_sample: u16) -> AppResult<f32> {
+    if bits_per_sample == 0 {
+        return Err(AppError::Processing(
+            "Corrupt WAV: bits_per_sample is 0".to_string(),
+        ));
+    }
+    Ok((1u64 << (bits_per_sample - 1)) as f32)
+}
+
 /// Load a WAV file from disk and convert it into `AudioData` (f32 PCM).
 fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, AppError> {
     let reader = hound::WavReader::open(path)
@@ -58,7 +73,7 @@ fn load_wav_to_audio_data(path: &std::path::Path) -> Result<AudioData, AppError>
                 .map_err(|e| AppError::Processing(format!("Corrupt WAV sample data: {e}")))?
         }
         hound::SampleFormat::Int => {
-            let max_val = (1 << (spec.bits_per_sample - 1)) as f32;
+            let max_val = compute_int_max_val(spec.bits_per_sample)?;
             reader
                 .into_samples::<i32>()
                 .collect::<Result<Vec<i32>, _>>()
@@ -529,6 +544,7 @@ pub async fn list_stt_providers(
 
 #[cfg(test)]
 mod tests {
+    use super::compute_int_max_val;
     use super::is_repeated_phrase_hallucination;
 
     use chrono::Utc;
@@ -620,5 +636,24 @@ mod tests {
         let long = "a".repeat(100);
         let text = format!("{long}. {long}. {long}.");
         assert!(!is_repeated_phrase_hallucination(&text));
+    }
+
+    #[test]
+    fn compute_int_max_val_rejects_zero_bits() {
+        let err = compute_int_max_val(0).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("bits_per_sample") || msg.contains("0"),
+            "expected helpful error mentioning bits_per_sample or 0, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn compute_int_max_val_handles_typical_widths() {
+        // Common widths used by hound's Int sample format.
+        assert_eq!(compute_int_max_val(8).unwrap(), 128.0);
+        assert_eq!(compute_int_max_val(16).unwrap(), 32_768.0);
+        assert_eq!(compute_int_max_val(24).unwrap(), 8_388_608.0);
+        assert_eq!(compute_int_max_val(32).unwrap(), 2_147_483_648.0);
     }
 }
