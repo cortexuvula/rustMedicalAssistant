@@ -1,0 +1,193 @@
+<script lang="ts">
+  import { pipeline, type PipelineStage } from '../../stores/pipeline';
+
+  type CopyStatus = 'idle' | 'copying' | 'copied';
+
+  interface Props {
+    pipelineRecordingId: string | null;
+    copyStatus?: CopyStatus;
+    onCancel: () => void;
+    onRetry: () => void;
+    onCopySoap: () => Promise<void> | void;
+    onSpeedRead: () => void;
+  }
+  let {
+    pipelineRecordingId,
+    copyStatus = $bindable<CopyStatus>('idle'),
+    onCancel,
+    onRetry,
+    onCopySoap,
+    onSpeedRead,
+  }: Props = $props();
+
+  // pipelineRecordingId is part of the public prop contract; the parent gates
+  // rendering on its presence and the component is reused per recording.
+  void pipelineRecordingId;
+
+  function stageLabel(stage: PipelineStage): string {
+    switch (stage) {
+      case 'transcribing': return 'Transcribing audio...';
+      case 'generating_soap': return 'Generating SOAP note...';
+      case 'completed': return 'SOAP note ready';
+      case 'failed': return 'Pipeline failed';
+      default: return '';
+    }
+  }
+
+  // Live clock for the pipeline-elapsed counter. Ticks once per second while
+  // a pipeline is in flight, then stops so we don't burn a timer forever.
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    const cur = $pipeline.current;
+    if (!cur || cur.finishedAt !== null) return;
+    nowMs = Date.now();
+    const id = setInterval(() => { nowMs = Date.now(); }, 1000);
+    return () => clearInterval(id);
+  });
+
+  function formatPipelineElapsed(ms: number): string {
+    const secs = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  }
+</script>
+
+{#if $pipeline.current}
+  <div class="pipeline-status">
+    <div class="pipeline-stages">
+      <div class="stage" class:active={$pipeline.current.stage === 'transcribing'} class:done={['generating_soap', 'completed'].includes($pipeline.current.stage)}>
+        {#if $pipeline.current.stage === 'transcribing'}
+          <span class="spinner"></span>
+        {:else if ['generating_soap', 'completed'].includes($pipeline.current.stage)}
+          <span class="stage-check">✓</span>
+        {:else}
+          <span class="stage-dot">○</span>
+        {/if}
+        Transcribe
+      </div>
+      <span class="stage-arrow">→</span>
+      <div class="stage" class:active={$pipeline.current.stage === 'generating_soap'} class:done={$pipeline.current.stage === 'completed'}>
+        {#if $pipeline.current.stage === 'generating_soap'}
+          <span class="spinner"></span>
+        {:else if $pipeline.current.stage === 'completed'}
+          <span class="stage-check">✓</span>
+        {:else}
+          <span class="stage-dot">○</span>
+        {/if}
+        SOAP Note
+      </div>
+      <span class="stage-arrow">→</span>
+      <div class="stage" class:done={$pipeline.current.stage === 'completed'}>
+        {#if $pipeline.current.stage === 'completed'}
+          <span class="stage-check">✓</span>
+        {:else}
+          <span class="stage-dot">○</span>
+        {/if}
+        Done
+      </div>
+    </div>
+
+    <p class="pipeline-label">{stageLabel($pipeline.current.stage)}</p>
+
+    <p class="pipeline-elapsed">
+      {#if $pipeline.current.finishedAt !== null}
+        {#if $pipeline.current.stage === 'completed'}
+          Processing took {formatPipelineElapsed($pipeline.current.finishedAt - $pipeline.current.startedAt)}
+        {:else}
+          Stopped after {formatPipelineElapsed($pipeline.current.finishedAt - $pipeline.current.startedAt)}
+        {/if}
+      {:else}
+        Elapsed {formatPipelineElapsed(nowMs - $pipeline.current.startedAt)}
+      {/if}
+    </p>
+
+    {#if ['transcribing', 'generating_soap'].includes($pipeline.current.stage)}
+      <div class="post-actions">
+        <button class="btn-secondary" onclick={onCancel}>Cancel</button>
+      </div>
+    {/if}
+
+    {#if $pipeline.current.stage === 'completed'}
+      <div class="post-actions">
+        <button class="btn-secondary" onclick={onSpeedRead}>Speed Read</button>
+        <button
+          class="btn-primary"
+          onclick={onCopySoap}
+          disabled={copyStatus !== 'idle'}
+        >
+          {copyStatus === 'copying' ? 'Copying…' : copyStatus === 'copied' ? 'Copied!' : 'Copy SOAP Note'}
+        </button>
+      </div>
+    {/if}
+
+    {#if $pipeline.current.stage === 'failed'}
+      <div class="error-text">{$pipeline.current.error}</div>
+      <div class="post-actions">
+        <button class="btn-primary" onclick={onRetry}>Retry</button>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  .pipeline-status {
+    text-align: center;
+    max-width: 500px;
+  }
+
+  .pipeline-stages {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .stage {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: color 0.2s ease;
+  }
+
+  .stage.active {
+    color: var(--accent);
+  }
+
+  .stage.done {
+    color: var(--success);
+  }
+
+  .stage-arrow {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .stage-check {
+    color: var(--success);
+    font-size: 14px;
+  }
+
+  .stage-dot {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .pipeline-label {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .pipeline-elapsed {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 8px;
+  }
+</style>
