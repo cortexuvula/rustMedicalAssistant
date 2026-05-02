@@ -1,4 +1,5 @@
 pub mod pool;
+pub mod encryption;
 pub mod migrations;
 pub mod recordings;
 pub mod processing_queue;
@@ -37,6 +38,8 @@ pub enum DbError {
     Constraint(String),
     #[error("Graph error: {0}")]
     Graph(String),
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -54,7 +57,7 @@ pub struct Database {
 impl Database {
     /// Open (or create) a file-backed database, running all pending migrations.
     pub fn open(db_path: &Path) -> DbResult<Self> {
-        let pool = pool::create_pool(db_path)?;
+        let pool = pool::create_pool(db_path, None)?;
         {
             let conn = pool.get().map_err(DbError::Pool)?;
             migrations::MigrationEngine::migrate(&conn)?;

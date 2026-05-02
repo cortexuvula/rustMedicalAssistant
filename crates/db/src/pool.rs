@@ -24,13 +24,27 @@ fn apply_pragmas(conn: &Connection) -> Result<(), rusqlite::Error> {
 }
 
 /// Create a file-backed connection pool with WAL mode enabled.
-pub fn create_pool(db_path: &Path) -> DbResult<DbPool> {
-    let manager = SqliteConnectionManager::file(db_path).with_init(|conn| apply_pragmas(conn));
+///
+/// When `db_key` is `Some`, the pool applies `PRAGMA key="x'<hex>'"` on every
+/// new connection before the standard pragmas, so the file is opened as a
+/// SQLCipher-encrypted database.
+pub fn create_pool(db_path: &Path, db_key: Option<[u8; 32]>) -> DbResult<DbPool> {
+    let manager = SqliteConnectionManager::file(db_path)
+        .with_init(move |conn| apply_init(conn, db_key.as_ref()));
     let pool = Pool::builder()
         .max_size(8)
         .build(manager)
         .map_err(DbError::Pool)?;
     Ok(pool)
+}
+
+/// Run on every fresh connection: apply the encryption key first (if any),
+/// then the standard pragmas.
+fn apply_init(conn: &Connection, db_key: Option<&[u8; 32]>) -> rusqlite::Result<()> {
+    if let Some(key) = db_key {
+        crate::encryption::apply_pragma_key(conn, key)?;
+    }
+    apply_pragmas(conn)
 }
 
 /// Create an in-memory connection pool (useful for tests).
@@ -72,7 +86,7 @@ mod tests {
     fn file_pool_wal_mode() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("test.db");
-        let pool = create_pool(&db_path).expect("file pool");
+        let pool = create_pool(&db_path, None).expect("file pool");
         let conn = pool.get().expect("conn");
         let mode: String = conn
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))

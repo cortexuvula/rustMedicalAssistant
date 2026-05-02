@@ -3443,6 +3443,7 @@ dependencies = [
  "bytemuck",
  "chrono",
  "cozo",
+ "hex",
  "medical-core",
  "proptest",
  "r2d2",
