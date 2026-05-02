@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -174,6 +174,8 @@ pub struct AppState {
     pub bm25_search: Arc<Bm25Search>,
     pub graph_search: Arc<GraphSearch>,
     pub ingestion: Arc<IngestionPipeline>,
+    /// Lazy-initialized sharing service. `None` until `start_sharing` is called.
+    pub sharing: Arc<RwLock<Option<Arc<medical_sharing::SharingService>>>>,
 }
 
 /// Register all supported AI providers (LM Studio + Ollama).
@@ -445,6 +447,7 @@ impl AppState {
             bm25_search,
             graph_search,
             ingestion,
+            sharing: Arc::new(RwLock::new(None)),
         })
     }
 }

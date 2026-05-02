@@ -45,6 +45,9 @@ medical-rag = { path = "../crates/rag" }
 medical-processing = { path = "../crates/processing" }
 medical-export = { path = "../crates/export" }
 medical-translation = { path = "../crates/translation" }
+medical-sharing = { path = "../crates/sharing" }
+rand = "0.8"
+hex = "0.4"
 reqwest = { workspace = true }
 
 [dev-dependencies]
