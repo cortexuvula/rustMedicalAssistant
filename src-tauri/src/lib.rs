@@ -3,7 +3,8 @@ mod commands;
 
 use std::path::PathBuf;
 
-use state::AppState;
+use state::{AppState, InitError};
+use tauri::Emitter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -103,11 +104,47 @@ pub fn run() {
     cleanup_old_logs(&log_directory, 7);
 
     // ── App init ─────────────────────────────────────────────────────────
-    let app_state = AppState::initialize()
-        .expect("Failed to initialize application state");
+    //
+    // `AppState::initialize` may return `InitError::DatabaseRecoveryNeeded`
+    // when an encrypted DB exists on disk but the keychain entry is missing
+    // or inaccessible. In that case we boot without managed state and emit
+    // a `database-recovery-needed` event so the frontend can show the
+    // recovery dialog. The recovery commands wired in Task 6 don't depend
+    // on `AppState`.
+    let init_result = AppState::initialize();
+    let recovery_reason: Option<String> = match &init_result {
+        Ok(_) => None,
+        Err(InitError::DatabaseRecoveryNeeded { reason }) => {
+            tracing::warn!(%reason, "Database recovery needed");
+            Some(reason.clone())
+        }
+        Err(InitError::Other(e)) => {
+            // Fatal — match the previous behaviour (panic so the process exits
+            // with a clear error rather than silently failing).
+            panic!("Failed to initialize application state: {e}");
+        }
+    };
 
-    tauri::Builder::default()
-        .manage(app_state)
+    let mut builder = tauri::Builder::default();
+    if let Ok(state) = init_result {
+        builder = builder.manage(state);
+    }
+    if let Some(reason) = recovery_reason {
+        builder = builder.setup(move |app| {
+            let handle = app.handle().clone();
+            let payload = serde_json::json!({ "reason": reason });
+            // Emit on the next tick so the frontend listener has time to mount.
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Err(e) = handle.emit("database-recovery-needed", payload) {
+                    tracing::error!(error = %e, "failed to emit database-recovery-needed");
+                }
+            });
+            Ok(())
+        });
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())

@@ -33,6 +33,49 @@ use medical_stt_providers::models as stt_models;
 
 use medical_core::traits::SttProvider;
 
+/// Errors that can be returned from `AppState::initialize()` to signal
+/// special boot conditions to the caller.
+#[derive(Debug)]
+pub enum InitError {
+    /// Encrypted DB exists but the keychain entry is missing or inaccessible.
+    /// The caller should emit a `database-recovery-needed` event and skip the
+    /// rest of normal app initialization.
+    DatabaseRecoveryNeeded { reason: String },
+    /// Any other initialization error (treated as fatal).
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for InitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InitError::DatabaseRecoveryNeeded { reason } => {
+                write!(f, "database recovery needed: {reason}")
+            }
+            InitError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for InitError {}
+
+impl From<std::io::Error> for InitError {
+    fn from(e: std::io::Error) -> Self {
+        InitError::Other(Box::new(e))
+    }
+}
+
+impl From<medical_db::DbError> for InitError {
+    fn from(e: medical_db::DbError) -> Self {
+        InitError::Other(Box::new(e))
+    }
+}
+
+impl From<medical_security::SecurityError> for InitError {
+    fn from(e: medical_security::SecurityError) -> Self {
+        InitError::Other(Box::new(e))
+    }
+}
+
 /// Wrapper to make `CaptureHandle` usable across threads.
 ///
 /// `CaptureHandle` holds a `cpal::Stream`, which cpal marks `!Send` on every
@@ -197,14 +240,89 @@ pub fn init_stt_providers_with_config(
 }
 
 impl AppState {
-    pub fn initialize() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn initialize() -> Result<Self, InitError> {
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("rust-medical-assistant");
         std::fs::create_dir_all(&data_dir)?;
 
         let db_path = data_dir.join("medical.db");
-        let db = Database::open(&db_path)?;
+
+        // ── Database encryption setup ────────────────────────────────────
+        // Look up the existing keychain entry (if any) and detect whether
+        // the DB on disk is plaintext or encrypted.
+        let keychain_lookup = medical_security::keychain::get_db_key();
+        let plaintext_on_disk = medical_db::encryption::is_plaintext_db(&db_path)
+            .unwrap_or(false);
+
+        let db_key: Option<[u8; 32]> = match (plaintext_on_disk, &keychain_lookup, db_path.exists()) {
+            // Encrypted DB exists, key found → normal start.
+            (false, Ok(Some(key)), true) => Some(*key),
+
+            // Encrypted DB exists but no key → recovery needed.
+            (false, Ok(None), true) => {
+                return Err(InitError::DatabaseRecoveryNeeded {
+                    reason: "encrypted database exists but no keychain entry was found".into(),
+                });
+            }
+
+            // Encrypted DB exists, keychain access failed → recovery (user must intervene).
+            (false, Err(e), true) => {
+                return Err(InitError::DatabaseRecoveryNeeded {
+                    reason: format!("keychain access failed: {e}"),
+                });
+            }
+
+            // Plaintext DB, no key yet → first-time encryption migration.
+            (true, Ok(None), _) => {
+                match medical_security::keychain::get_or_create_db_key() {
+                    Ok(key) => {
+                        match medical_db::encryption::migrate_plaintext_to_encrypted(&db_path, &key) {
+                            Ok(_) => {
+                                tracing::info!("Database encrypted on first launch");
+                                Some(key)
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "DB encryption migration failed; continuing on plaintext");
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Could not access OS keychain; running on plaintext DB");
+                        None
+                    }
+                }
+            }
+
+            // Plaintext DB exists but a key is also present (user replaced the file?).
+            // Run on plaintext for this boot; warn loudly. A re-encryption flow
+            // could be a follow-up.
+            (true, Ok(Some(_)), _) => {
+                tracing::warn!("Plaintext DB found but a keychain key exists; running on plaintext for safety");
+                None
+            }
+
+            // Plaintext DB but keychain access failed: run on plaintext, warn.
+            (true, Err(e), _) => {
+                tracing::warn!(error = %e, "Keychain access failed while plaintext DB exists; running on plaintext");
+                None
+            }
+
+            // No DB at all (fresh install): generate key, store it; a fresh
+            // encrypted DB will be created.
+            (_, _, false) => {
+                match medical_security::keychain::get_or_create_db_key() {
+                    Ok(key) => Some(key),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Fresh install: could not store DB key in keychain; using plaintext");
+                        None
+                    }
+                }
+            }
+        };
+
+        let db = Database::open(&db_path, db_key)?;
         let db = Arc::new(db);
 
         // Flip any recordings that were Processing when the previous run ended

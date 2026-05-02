@@ -56,8 +56,8 @@ pub struct Database {
 
 impl Database {
     /// Open (or create) a file-backed database, running all pending migrations.
-    pub fn open(db_path: &Path) -> DbResult<Self> {
-        let pool = pool::create_pool(db_path, None)?;
+    pub fn open(db_path: &Path, db_key: Option<[u8; 32]>) -> DbResult<Self> {
+        let pool = pool::create_pool(db_path, db_key)?;
         {
             let conn = pool.get().map_err(DbError::Pool)?;
             migrations::MigrationEngine::migrate(&conn)?;
@@ -102,7 +102,7 @@ mod tests {
     fn opens_file() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("app.db");
-        let db = Database::open(&db_path).expect("open file db");
+        let db = Database::open(&db_path, None).expect("open file db");
         let conn = db.conn().expect("conn");
         // Migrations should have run — check that the recordings table exists.
         let count: i64 = conn
