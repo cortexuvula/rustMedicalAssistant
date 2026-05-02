@@ -9,7 +9,7 @@ graph = ["dep:cozo"]
 
 [dependencies]
 medical-core = { path = "../core" }
-rusqlite = { version = "0.32", features = ["bundled", "vtab", "functions"] }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher", "vtab", "functions"] }
 cozo = { version = "0.7", default-features = false, features = ["storage-sled", "rayon"], optional = true }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
