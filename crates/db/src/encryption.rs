@@ -47,6 +47,145 @@ pub fn is_plaintext_db(db_path: &std::path::Path) -> DbResult<bool> {
     Ok(&header == b"SQLite format 3\0")
 }
 
+use std::path::{Path, PathBuf};
+
+/// Outcome of a successful `migrate_plaintext_to_encrypted` call.
+#[derive(Debug)]
+pub struct MigrationOutcome {
+    /// Final path of the encrypted database (same as the input path on success).
+    pub encrypted_path: PathBuf,
+    /// Whether the backup file was deleted (true on full success).
+    pub backup_deleted: bool,
+}
+
+/// Migrate a plaintext SQLite DB at `db_path` to an encrypted SQLCipher DB
+/// using `db_key`. Sequence:
+///
+/// 1. Backup `db_path` to `<db_path>.pre-encryption.bak`.
+/// 2. Open empty encrypted DB at `<db_path>.encrypting`.
+/// 3. Use sqlcipher_export() to copy all data from plaintext.
+/// 4. Verify row counts table-by-table.
+/// 5. Atomic rename: encrypting → original; delete backup.
+///
+/// On any failure after step 1, the original is restored from the backup
+/// and the error is returned.
+pub fn migrate_plaintext_to_encrypted(
+    db_path: &Path,
+    db_key: &[u8; 32],
+) -> DbResult<MigrationOutcome> {
+    let backup_path = backup_path_for(db_path);
+    let encrypting_path = encrypting_path_for(db_path);
+
+    // Step 1: backup (must succeed before we touch anything else).
+    std::fs::copy(db_path, &backup_path)
+        .map_err(|e| crate::DbError::Other(format!("backup copy failed: {e}")))?;
+
+    // Wrap the rest in a closure so we can restore on failure.
+    let result: DbResult<()> = (|| {
+        // Step 2: open empty encrypted DB
+        if encrypting_path.exists() {
+            std::fs::remove_file(&encrypting_path).ok();
+        }
+        let enc = Connection::open(&encrypting_path)
+            .map_err(|e| crate::DbError::Other(format!("open encrypting: {e}")))?;
+        apply_pragma_key(&enc, db_key)
+            .map_err(|e| crate::DbError::Other(format!("pragma key on new encrypted DB: {e}")))?;
+
+        // Step 3: ATTACH plaintext, sqlcipher_export, DETACH.
+        // The plaintext is opened with KEY '' (empty) which tells SQLCipher
+        // to treat it as a non-encrypted SQLite database.
+        let plaintext_str = db_path.to_string_lossy().replace('\'', "''");
+        enc.execute_batch(&format!(
+            "ATTACH DATABASE '{plaintext_str}' AS plaintext KEY '';\n\
+             SELECT sqlcipher_export('main', 'plaintext');\n\
+             DETACH DATABASE plaintext;"
+        ))
+        .map_err(|e| crate::DbError::Other(format!("sqlcipher_export: {e}")))?;
+        drop(enc);
+
+        // Step 4: verify by re-opening and comparing row counts.
+        verify_row_counts(db_path, &encrypting_path, db_key)?;
+
+        // Step 5: atomic swap (replace original with encrypted).
+        std::fs::rename(&encrypting_path, db_path)
+            .map_err(|e| crate::DbError::Other(format!("rename failed: {e}")))?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            // On success delete the backup.
+            std::fs::remove_file(&backup_path).ok();
+            Ok(MigrationOutcome {
+                encrypted_path: db_path.to_path_buf(),
+                backup_deleted: true,
+            })
+        }
+        Err(e) => {
+            // Restore from backup; clean up partial encrypted file.
+            let _ = std::fs::rename(&backup_path, db_path);
+            let _ = std::fs::remove_file(&encrypting_path);
+            Err(e)
+        }
+    }
+}
+
+/// Compare row counts table-by-table between the plaintext and encrypted DBs.
+/// Returns Err on any mismatch. Used internally by `migrate_plaintext_to_encrypted`
+/// but exposed for diagnostic use too.
+fn verify_row_counts(
+    plaintext_path: &Path,
+    encrypted_path: &Path,
+    db_key: &[u8; 32],
+) -> DbResult<()> {
+    let plaintext = Connection::open(plaintext_path)
+        .map_err(|e| crate::DbError::Other(format!("verify open plaintext: {e}")))?;
+    let encrypted = Connection::open(encrypted_path)
+        .map_err(|e| crate::DbError::Other(format!("verify open encrypted: {e}")))?;
+    apply_pragma_key(&encrypted, db_key)
+        .map_err(|e| crate::DbError::Other(format!("verify pragma key: {e}")))?;
+
+    let tables = list_user_tables(&plaintext)?;
+    for table in tables {
+        let plaintext_count: i64 = plaintext
+            .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |row| row.get(0))
+            .map_err(|e| crate::DbError::Other(format!("count plaintext.{table}: {e}")))?;
+        let encrypted_count: i64 = encrypted
+            .query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |row| row.get(0))
+            .map_err(|e| crate::DbError::Other(format!("count encrypted.{table}: {e}")))?;
+        if plaintext_count != encrypted_count {
+            return Err(crate::DbError::Other(format!(
+                "row count mismatch in table {table}: plaintext={plaintext_count}, encrypted={encrypted_count}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn list_user_tables(conn: &Connection) -> DbResult<Vec<String>> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .map_err(|e| crate::DbError::Other(format!("list tables: {e}")))?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| crate::DbError::Other(format!("list tables iter: {e}")))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| crate::DbError::Other(format!("list tables collect: {e}")))?;
+    Ok(names)
+}
+
+fn backup_path_for(db_path: &Path) -> PathBuf {
+    let mut s = db_path.as_os_str().to_owned();
+    s.push(".pre-encryption.bak");
+    PathBuf::from(s)
+}
+
+fn encrypting_path_for(db_path: &Path) -> PathBuf {
+    let mut s = db_path.as_os_str().to_owned();
+    s.push(".encrypting");
+    PathBuf::from(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
