@@ -4,6 +4,7 @@
 //! persistence; the raw token is returned exactly once at issue time.
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 use rand::RngCore;
@@ -16,6 +17,8 @@ pub enum TokenStoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("entropy: {0}")]
     Entropy(String),
+    #[error("lock poisoned")]
+    LockPoisoned,
 }
 
 pub type Result<T> = std::result::Result<T, TokenStoreError>;
@@ -35,8 +38,13 @@ pub struct ClientRow {
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
+/// Thread-safe wrapper around a `rusqlite::Connection`.
+///
+/// `rusqlite::Connection` is `Send` but not `Sync`; the internal `Mutex`
+/// makes `TokenStore: Send + Sync`, allowing it to be shared via `Arc` from
+/// multi-threaded Axum state.
 pub struct TokenStore {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl std::fmt::Debug for TokenStore {
@@ -63,7 +71,7 @@ impl TokenStore {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_token_hash ON clients(token_hash);
             "#,
         )?;
-        Ok(Self { conn })
+        Ok(Self { conn: Mutex::new(conn) })
     }
 
     pub fn issue(&self, label: &str) -> Result<IssuedToken> {
@@ -77,18 +85,19 @@ impl TokenStore {
         );
         let hash = Sha256::digest(token.as_bytes()).to_vec();
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+        conn.execute(
             "INSERT INTO clients (label, token_hash, created_at) VALUES (?, ?, ?)",
             params![label, hash, now],
         )?;
-        let id = self.conn.last_insert_rowid();
+        let id = conn.last_insert_rowid();
         Ok(IssuedToken { id, token })
     }
 
     pub fn validate(&self, token: &str) -> Result<Option<ClientRow>> {
         let hash = Sha256::digest(token.as_bytes()).to_vec();
-        let row = self
-            .conn
+        let conn = self.conn.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+        let row = conn
             .query_row(
                 "SELECT id, label, created_at, last_seen_at, revoked_at \
                  FROM clients WHERE token_hash = ? AND revoked_at IS NULL",
@@ -115,7 +124,8 @@ impl TokenStore {
 
     pub fn touch(&self, id: i64) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+        conn.execute(
             "UPDATE clients SET last_seen_at = ? WHERE id = ?",
             params![now, id],
         )?;
@@ -124,7 +134,8 @@ impl TokenStore {
 
     pub fn revoke(&self, id: i64) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
+        let conn = self.conn.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+        conn.execute(
             "UPDATE clients SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
             params![now, id],
         )?;
@@ -132,7 +143,8 @@ impl TokenStore {
     }
 
     pub fn list(&self) -> Result<Vec<ClientRow>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().map_err(|_| TokenStoreError::LockPoisoned)?;
+        let mut stmt = conn.prepare(
             "SELECT id, label, created_at, last_seen_at, revoked_at \
              FROM clients WHERE revoked_at IS NULL ORDER BY id ASC",
         )?;
