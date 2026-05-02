@@ -1,4 +1,3 @@
-//! Service installer — registers FerriScribe as a persistent OS service.
+//! Service installer — per-platform persistent Ollama service writers (launchd / systemd / scheduled task).
 
-#[allow(dead_code)]
 pub(crate) fn _placeholder() {}
