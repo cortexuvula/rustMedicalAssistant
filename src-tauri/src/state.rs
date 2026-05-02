@@ -76,6 +76,38 @@ impl From<medical_security::SecurityError> for InitError {
     }
 }
 
+/// Holds the recovery reason between boot and the frontend's mount.
+///
+/// Always registered with `app.manage(...)` (regardless of which init branch
+/// fires) so the `get_database_recovery_state` command can query it without
+/// depending on `AppState`. `Some(reason)` means the frontend should render
+/// the recovery dialog; `None` means normal boot.
+///
+/// This replaces the racy 500ms-delay-and-emit pattern: the frontend invokes
+/// the query command on mount instead of subscribing to an event that may
+/// fire before the listener is registered.
+#[derive(Default)]
+pub struct RecoveryState(pub std::sync::Mutex<Option<String>>);
+
+impl RecoveryState {
+    pub fn set(&self, reason: String) {
+        if let Ok(mut guard) = self.0.lock() {
+            *guard = Some(reason);
+        }
+    }
+
+    pub fn get(&self) -> Option<String> {
+        self.0.lock().ok().and_then(|g| g.clone())
+    }
+
+    #[allow(dead_code)]
+    pub fn clear(&self) {
+        if let Ok(mut guard) = self.0.lock() {
+            *guard = None;
+        }
+    }
+}
+
 /// Wrapper to make `CaptureHandle` usable across threads.
 ///
 /// `CaptureHandle` holds a `cpal::Stream`, which cpal marks `!Send` on every

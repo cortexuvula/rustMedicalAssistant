@@ -4,11 +4,13 @@
   import { settings } from './lib/stores/settings';
   import { theme } from './lib/stores/theme';
   import { generation } from './lib/stores/generation';
+  import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
+  import DatabaseRecoveryDialog from './lib/dialogs/DatabaseRecoveryDialog.svelte';
   import { selectedRecording, selectRecording } from './lib/stores/recordings';
   import { pipeline } from './lib/stores/pipeline';
   import { audio } from './lib/stores/audio';
@@ -29,6 +31,11 @@
   let activeTab = $state('record');
   let settingsOpen = $state(false);
   let previousTab = $state('record');
+
+  // Database recovery dialog state. The backend always registers
+  // `RecoveryState` (Some(reason) on recovery, None on normal boot), so we
+  // query it on mount instead of subscribing to a timing-race event.
+  let recoveryReason = $state<string | null>(null);
 
   // Intercept settings tab — open modal instead of navigating
   $effect(() => {
@@ -52,6 +59,18 @@
   }
 
   onMount(async () => {
+    // Query recovery state first. If the backend signaled recovery is
+    // needed, AppState was not registered, so further init calls would
+    // fail. Render only the recovery dialog in that case.
+    try {
+      recoveryReason = await invoke<string | null>('get_database_recovery_state');
+    } catch (e) {
+      console.error('Failed to query recovery state:', e);
+    }
+    if (recoveryReason) {
+      return;
+    }
+
     // Tear down any prior listeners (Vite HMR re-runs onMount without onDestroy)
     progressUnlisten?.();
     pipelineCompleteUnlisten?.();
@@ -142,6 +161,9 @@
   });
 </script>
 
+{#if recoveryReason}
+  <DatabaseRecoveryDialog reason={recoveryReason} />
+{:else}
 <div class="app-shell">
   <aside class="app-sidebar">
     <Sidebar bind:activeTab />
@@ -185,6 +207,7 @@
 
 <RsvpSectionPicker />
 <RsvpReader />
+{/if}
 
 <style>
   .app-shell {

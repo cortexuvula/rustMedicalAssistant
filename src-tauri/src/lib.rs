@@ -2,9 +2,9 @@ mod state;
 mod commands;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use state::{AppState, InitError};
-use tauri::Emitter;
+use state::{AppState, InitError, RecoveryState};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -107,42 +107,33 @@ pub fn run() {
     //
     // `AppState::initialize` may return `InitError::DatabaseRecoveryNeeded`
     // when an encrypted DB exists on disk but the keychain entry is missing
-    // or inaccessible. In that case we boot without managed state and emit
-    // a `database-recovery-needed` event so the frontend can show the
-    // recovery dialog. The recovery commands wired in Task 6 don't depend
-    // on `AppState`.
+    // or inaccessible. In that case we boot without managed `AppState` and
+    // populate `RecoveryState` with the reason so the frontend can query
+    // it on mount and render the recovery dialog. `RecoveryState` is always
+    // managed — `Some(reason)` for recovery, `None` for normal boot — so the
+    // recovery commands (which don't depend on `AppState`) always have access.
+    let recovery_state = Arc::new(RecoveryState::default());
+
     let init_result = AppState::initialize();
-    let recovery_reason: Option<String> = match &init_result {
-        Ok(_) => None,
+    let mut builder = tauri::Builder::default();
+    match init_result {
+        Ok(state) => {
+            builder = builder.manage(state);
+        }
         Err(InitError::DatabaseRecoveryNeeded { reason }) => {
             tracing::warn!(%reason, "Database recovery needed");
-            Some(reason.clone())
+            recovery_state.set(reason);
+            // Do not register AppState; do not start the background subsystems.
         }
         Err(InitError::Other(e)) => {
             // Fatal — match the previous behaviour (panic so the process exits
             // with a clear error rather than silently failing).
             panic!("Failed to initialize application state: {e}");
         }
-    };
+    }
 
-    let mut builder = tauri::Builder::default();
-    if let Ok(state) = init_result {
-        builder = builder.manage(state);
-    }
-    if let Some(reason) = recovery_reason {
-        builder = builder.setup(move |app| {
-            let handle = app.handle().clone();
-            let payload = serde_json::json!({ "reason": reason });
-            // Emit on the next tick so the frontend listener has time to mount.
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if let Err(e) = handle.emit("database-recovery-needed", payload) {
-                    tracing::error!(error = %e, "failed to emit database-recovery-needed");
-                }
-            });
-            Ok(())
-        });
-    }
+    // Always managed so `get_database_recovery_state` is always callable.
+    builder = builder.manage(recovery_state);
 
     builder
         .plugin(tauri_plugin_opener::init())
@@ -215,6 +206,9 @@ pub fn run() {
             commands::context_templates::delete_context_template,
             commands::context_templates::import_context_templates_json,
             commands::context_templates::export_context_templates_json,
+            commands::recovery::get_database_recovery_state,
+            commands::recovery::recover_database_from_path,
+            commands::recovery::recover_database_wipe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
