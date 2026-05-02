@@ -209,6 +209,7 @@ pub fn run() {
             commands::recovery::get_database_recovery_state,
             commands::recovery::recover_database_from_path,
             commands::recovery::recover_database_wipe,
+            commands::recovery::database_encryption_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

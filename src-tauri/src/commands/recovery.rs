@@ -89,6 +89,33 @@ pub async fn recover_database_wipe() -> AppResult<()> {
     Ok(())
 }
 
+/// Returns the current encryption state of the on-disk database.
+/// Frontend uses this to display the Settings → Database security panel.
+#[tauri::command]
+pub async fn database_encryption_status() -> AppResult<serde_json::Value> {
+    // Resolve data_dir the same way AppState::initialize does (NOT via
+    // tauri::AppHandle::path() which uses the bundle id).
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("rust-medical-assistant");
+    let db_path = data_dir.join("medical.db");
+
+    if !db_path.exists() {
+        return Ok(serde_json::json!({ "state": "no-database" }));
+    }
+
+    let plaintext = medical_db::encryption::is_plaintext_db(&db_path)
+        .map_err(|e| AppError::Other(format!("inspect: {e}")))?;
+    let key_present = medical_security::keychain::get_db_key()
+        .map(|opt| opt.is_some())
+        .unwrap_or(false);
+
+    Ok(serde_json::json!({
+        "state": if plaintext { "plaintext" } else { "encrypted" },
+        "key_present": key_present,
+    }))
+}
+
 /// Resolve the same data directory used by `AppState::initialize` so the
 /// recovery commands operate on the file the boot flow will read on the
 /// next launch. Do NOT use `tauri::AppHandle::path().app_data_dir()` —
