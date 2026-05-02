@@ -3514,6 +3514,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "chrono",
+ "hex",
  "hmac",
  "keyring",
  "lazy_static",

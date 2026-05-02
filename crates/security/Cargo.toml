@@ -10,6 +10,7 @@ pbkdf2 = { version = "0.12", features = ["simple"] }
 sha2 = "0.10"
 hmac = "0.12"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+hex = "0.4"
 rand = "0.8"
 base64 = "0.22"
 regex = "1"

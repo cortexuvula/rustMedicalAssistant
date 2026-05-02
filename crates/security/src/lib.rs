@@ -1,4 +1,5 @@
 pub mod key_storage;
+pub mod keychain;
 pub mod machine_id;
 pub mod phi_redactor;
 pub mod audit_logger;
