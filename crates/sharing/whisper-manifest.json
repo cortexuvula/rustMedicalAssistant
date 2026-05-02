@@ -1,0 +1,29 @@
+{
+  "version": "v1.7.6",
+  "binaries": {
+    "macos-aarch64": {
+      "url": "https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.6/whisper-server-macos-arm64.zip",
+      "sha256": null,
+      "archive": "zip",
+      "binary_name": "whisper-server"
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.6/whisper-server-macos-x86_64.zip",
+      "sha256": null,
+      "archive": "zip",
+      "binary_name": "whisper-server"
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.6/whisper-server-linux-x86_64.tar.gz",
+      "sha256": null,
+      "archive": "tar.gz",
+      "binary_name": "whisper-server"
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.6/whisper-server-windows-x86_64.zip",
+      "sha256": null,
+      "archive": "zip",
+      "binary_name": "whisper-server.exe"
+    }
+  }
+}
