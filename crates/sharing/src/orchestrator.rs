@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::SharingError;
@@ -17,7 +17,7 @@ use crate::pairing::PairingState;
 use crate::token_store::TokenStore;
 use crate::whisper_supervisor::WhisperSupervisor;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct SharingConfig {
     pub enabled: bool,
     pub friendly_name: String,
@@ -32,6 +32,26 @@ pub struct SharingConfig {
     pub whisper_model_path: PathBuf,
     pub whisper_internal_api_key: String,
     pub version: String,
+}
+
+impl std::fmt::Debug for SharingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharingConfig")
+            .field("enabled", &self.enabled)
+            .field("friendly_name", &self.friendly_name)
+            .field("ollama_proxy_port", &self.ollama_proxy_port)
+            .field("whisper_proxy_port", &self.whisper_proxy_port)
+            .field("pairing_port", &self.pairing_port)
+            .field("whisper_internal_port", &self.whisper_internal_port)
+            .field("lmstudio_port", &self.lmstudio_port)
+            .field("token_store_path", &self.token_store_path)
+            .field("token_store_key", &"<redacted: 32 bytes>")
+            .field("binary_dir", &self.binary_dir)
+            .field("whisper_model_path", &self.whisper_model_path)
+            .field("whisper_internal_api_key", &"<redacted>")
+            .field("version", &self.version)
+            .finish()
+    }
 }
 
 impl Default for SharingConfig {
