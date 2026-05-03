@@ -53,12 +53,19 @@ pub async fn start_sharing(
     state: State<'_, AppState>,
     friendly_name: String,
 ) -> Result<(), String> {
+    // Acquire the write lock BEFORE binding ports / spawning proxies so that a
+    // concurrent stop_sharing cannot return Ok while we are mid-start and leave
+    // the service running with no future cleanup path.
+    let mut sharing_slot = state.sharing.write().await;
+    if sharing_slot.is_some() {
+        return Err("sharing already running".to_string());
+    }
     let cfg = build_sharing_config(&state, friendly_name)
         .await
         .map_err(|e| e.to_string())?;
     let service = Arc::new(SharingService::new(cfg).map_err(|e| e.to_string())?);
     service.start().await.map_err(|e| e.to_string())?;
-    *state.sharing.write().await = Some(service);
+    *sharing_slot = Some(service);
 
     // Heavy-box routing: this machine IS the office server, so route AI/STT
     // calls to the upstream services on localhost directly — no proxy hop, no

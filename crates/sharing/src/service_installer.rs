@@ -190,6 +190,10 @@ mod windows {
                     .to_string(),
             )
         })?;
+        // Escape XML-special characters in the path before embedding it in the
+        // XML document. Then wrap in &quot; so cmd.exe treats it as a quoted
+        // argument — without this, a path like C:\Program Files\… causes
+        // cmd.exe to execute "C:\Program" with the rest as arguments.
         let bin_str = super::xml_escape(&bin.to_string_lossy());
         let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -198,14 +202,18 @@ mod windows {
   <Actions Context="Author">
     <Exec>
       <Command>cmd.exe</Command>
-      <Arguments>/c set OLLAMA_HOST=127.0.0.1:11434 &amp; {bin_str} serve</Arguments>
+      <Arguments>/c set OLLAMA_HOST=127.0.0.1:11434 &amp; &quot;{bin_str}&quot; serve</Arguments>
     </Exec>
   </Actions>
 </Task>"#
         );
         let dir = std::env::temp_dir();
         let xml_path = dir.join("ferriscribe-ollama.xml");
-        std::fs::write(&xml_path, xml).map_err(SharingError::Io)?;
+        // Prepend a UTF-8 BOM so older Windows builds (pre-1809) parse the
+        // file encoding correctly.
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(xml.as_bytes());
+        std::fs::write(&xml_path, bytes).map_err(SharingError::Io)?;
         let status = std::process::Command::new("schtasks")
             .args(["/Create", "/TN", "FerriScribe Ollama", "/XML"])
             .arg(&xml_path)

@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,6 +20,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 const MANIFEST: &str = include_str!("../whisper-manifest.json");
@@ -76,6 +78,12 @@ pub struct WhisperSupervisor {
     port: u16,
     child: Mutex<Option<Child>>,
     stop: Arc<tokio::sync::Notify>,
+    /// Set to `true` before `stop.notify_waiters()` so the supervisor loop
+    /// sees the intent even if the notification is delivered before the
+    /// `select!` future has registered a waiter.
+    stopped: AtomicBool,
+    /// Handle to the supervisor task so `stop()` can abort it as a safety net.
+    supervisor_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl WhisperSupervisor {
@@ -87,6 +95,8 @@ impl WhisperSupervisor {
             api_key,
             child: Mutex::new(None),
             stop: Arc::new(tokio::sync::Notify::new()),
+            stopped: AtomicBool::new(false),
+            supervisor_handle: Mutex::new(None),
         }
     }
 
@@ -158,15 +168,21 @@ impl WhisperSupervisor {
         let child = self.spawn_once_at(&bin).await?;
         *self.child.lock().await = Some(child);
         let me = Arc::clone(self);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             me.supervise().await;
         });
+        *self.supervisor_handle.lock().await = Some(handle);
         Ok(())
     }
 
     async fn supervise(self: Arc<Self>) {
         let mut backoff = Duration::from_secs(1);
         loop {
+            // Belt-and-suspenders: if stop() was called before we even loop,
+            // exit immediately rather than attempting another spawn.
+            if self.stopped.load(Ordering::Relaxed) {
+                return;
+            }
             let mut guard = self.child.lock().await;
             let Some(mut c) = guard.take() else { return; };
             drop(guard);
@@ -177,6 +193,12 @@ impl WhisperSupervisor {
                     tokio::select! {
                         _ = tokio::time::sleep(backoff) => {}
                         _ = self.stop.notified() => { return; }
+                    }
+                    // Re-check `stopped` after the backoff sleep — stop() may have
+                    // been called while we were sleeping (notify_waiters was used
+                    // as a best-effort signal only).
+                    if self.stopped.load(Ordering::Relaxed) {
+                        return;
                     }
                     backoff = (backoff * 2).min(Duration::from_secs(60));
                     let bin = match self.binary_dir.read_dir() {
@@ -218,9 +240,17 @@ impl WhisperSupervisor {
     }
 
     pub async fn stop(&self) {
+        // Set the flag BEFORE notifying so the supervise() loop sees it even
+        // if it polls stop.notified() after the waiters snapshot is taken.
+        self.stopped.store(true, Ordering::Relaxed);
         self.stop.notify_waiters();
         if let Some(mut c) = self.child.lock().await.take() {
             let _ = c.kill().await;
+        }
+        // Belt-and-suspenders: abort the supervisor task so pathological cases
+        // (e.g. stuck in spawn_once_at) can't leave it running.
+        if let Some(handle) = self.supervisor_handle.lock().await.take() {
+            handle.abort();
         }
     }
 }
