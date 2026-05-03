@@ -353,11 +353,7 @@ async fn tailscale_address() -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    v.get("Self")?
-        .get("DNSName")?
-        .as_str()
-        .map(|s| s.trim_end_matches('.').to_string())
+    medical_sharing::tailscale::parse_self_dns_name(&out.stdout)
 }
 
 async fn lmstudio_running_port() -> Option<u16> {
