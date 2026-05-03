@@ -1,0 +1,104 @@
+name: Build whisper-server
+
+on:
+  push:
+    tags:
+      - 'whisper-server-v*'
+  workflow_dispatch:
+    inputs:
+      whisper_tag:
+        description: 'whisper.cpp upstream tag to build'
+        required: true
+        default: 'v1.7.6'
+
+env:
+  WHISPER_TAG: ${{ github.event.inputs.whisper_tag || 'v1.7.6' }}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            triple: macos-aarch64
+            archive: zip
+          - platform: ubuntu-24.04
+            triple: linux-x86_64
+            archive: tar.gz
+          - platform: windows-latest
+            triple: windows-x86_64
+            archive: zip
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout whisper.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: ${{ env.WHISPER_TAG }}
+          path: whisper.cpp
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Configure (CMake)
+        working-directory: whisper.cpp
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_SERVER=ON
+
+      - name: Build server
+        working-directory: whisper.cpp
+        run: cmake --build build --config Release --target whisper-server
+
+      - name: Stage binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p stage
+          cp whisper.cpp/build/bin/whisper-server stage/
+          chmod +x stage/whisper-server
+
+      - name: Stage binary (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp whisper.cpp/build/bin/Release/whisper-server.exe stage/
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          cd stage
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -Command "Compress-Archive -Path whisper-server.exe -DestinationPath ../whisper-server-${{ matrix.triple }}.zip"
+          else
+            zip ../whisper-server-${{ matrix.triple }}.zip whisper-server
+          fi
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          tar czf whisper-server-${{ matrix.triple }}.tar.gz -C stage whisper-server
+
+      - name: Compute SHA-256
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then SHA=$(shasum -a 256 whisper-server-${{ matrix.triple }}.${{ matrix.archive }} | awk '{print $1}');
+          elif [ "${{ runner.os }}" = "Windows" ]; then SHA=$(powershell -Command "(Get-FileHash whisper-server-${{ matrix.triple }}.${{ matrix.archive }} -Algorithm SHA256).Hash.ToLower()");
+          else SHA=$(sha256sum whisper-server-${{ matrix.triple }}.${{ matrix.archive }} | awk '{print $1}'); fi
+          echo "SHA256=$SHA" | tee -a "$GITHUB_ENV"
+          echo "::notice title=whisper-server ${{ matrix.triple }}::SHA256=$SHA"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: whisper-server-${{ matrix.triple }}.${{ matrix.archive }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: false
