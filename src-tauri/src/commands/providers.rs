@@ -36,8 +36,9 @@ pub async fn reinit_providers(
         (None, None, None)
     };
 
-    // Rebuild AI providers with current config (includes LM Studio host/port)
-    let mut ai_handles = state::init_ai_providers(&config, ollama_ep, lmstudio_ep);
+    // Rebuild AI providers with current config (includes LM Studio host/port).
+    // Clone the endpoints so we can re-use them below to sync the typed handles.
+    let mut ai_handles = state::init_ai_providers(&config, ollama_ep.clone(), lmstudio_ep.clone());
 
     // Restore the user's active provider preference from saved settings
     // so reinit doesn't silently switch to a random provider.
@@ -50,10 +51,23 @@ pub async fn reinit_providers(
     }
 
     // Rebuild STT provider based on current config (mode + whisper model + remote host/port/key).
-    let stt_handles = state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep);
+    let stt_handles = state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep.clone());
     {
         let mut guard = state.stt_providers.lock().await;
         *guard = stt_handles.provider;
+    }
+
+    // Keep the typed provider handles in sync with the freshly rebuilt endpoints
+    // so subsequent set_endpoint calls (e.g. from start_sharing / pair_with_server)
+    // hit the active configuration rather than stale Arcs from the previous init.
+    if let Some(ref p) = state.ollama_provider {
+        p.set_endpoint(ollama_ep).await;
+    }
+    if let Some(ref p) = state.lmstudio_provider {
+        p.set_endpoint(lmstudio_ep).await;
+    }
+    if let Some(ref p) = state.remote_stt_provider {
+        p.set_endpoint(whisper_ep).await;
     }
 
     info!(providers = ?available, "Providers reinitialized");

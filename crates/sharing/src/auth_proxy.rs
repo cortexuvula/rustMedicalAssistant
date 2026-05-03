@@ -46,6 +46,9 @@ pub async fn spawn_auth_proxy(
         )))?;
     let client = Client::builder()
         .pool_max_idle_per_host(8)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        // No overall timeout — Ollama generations and whisper transcriptions
+        // can be arbitrarily long; only the connection phase is bounded.
         .build()
         .map_err(|e| crate::SharingError::AuthProxy(e.to_string()))?;
     let state = AppState { config: config.clone(), client, store };

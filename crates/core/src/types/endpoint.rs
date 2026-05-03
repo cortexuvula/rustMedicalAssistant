@@ -3,7 +3,7 @@
 /// A remote endpoint that may be reachable on either a LAN address or a
 /// Tailscale address. The resolver probes LAN first with a short connect
 /// timeout, then falls back to Tailscale.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct RemoteEndpoint {
     /// LAN IP or hostname (no scheme, no port).
     pub lan: Option<String>,
@@ -13,6 +13,19 @@ pub struct RemoteEndpoint {
     pub port: u16,
     /// Optional bearer token sent as `Authorization: Bearer <token>`.
     pub bearer: Option<String>,
+}
+
+/// Manual `Debug` impl that redacts the bearer token so it can never appear
+/// in `tracing::debug!(?endpoint, …)` output or any other log sink.
+impl std::fmt::Debug for RemoteEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteEndpoint")
+            .field("lan", &self.lan)
+            .field("tailscale", &self.tailscale)
+            .field("port", &self.port)
+            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl RemoteEndpoint {
