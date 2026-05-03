@@ -102,16 +102,15 @@ pub async fn download_model(
         None
     };
 
-    let stt_handles =
-        crate::state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep.clone());
+    let crate::state::SttProviderHandles { provider: new_stt_provider, remote: new_remote_stt } =
+        crate::state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep);
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt_handles.provider;
+        *guard = new_stt_provider;
     }
-    // Keep the typed remote handle in AppState in sync with the updated endpoint.
-    if let Some(ref remote_arc) = state.remote_stt_provider {
-        remote_arc.set_endpoint(whisper_ep).await;
-    }
+    // Replace the typed handle with the freshly built Arc so the handle and the
+    // stt_providers slot point at the SAME instance.
+    *state.remote_stt_provider.write().await = new_remote_stt;
 
     Ok(())
 }

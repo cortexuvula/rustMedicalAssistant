@@ -91,14 +91,23 @@ pub async fn start_sharing(
         bearer: None,
     });
 
-    if let Some(ref p) = state.ollama_provider {
-        p.set_endpoint(local_ollama).await;
+    {
+        let guard = state.ollama_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(local_ollama).await;
+        }
     }
-    if let Some(ref p) = state.lmstudio_provider {
-        p.set_endpoint(local_lmstudio).await;
+    {
+        let guard = state.lmstudio_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(local_lmstudio).await;
+        }
     }
-    if let Some(ref p) = state.remote_stt_provider {
-        p.set_endpoint(local_whisper).await;
+    {
+        let guard = state.remote_stt_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(local_whisper).await;
+        }
     }
 
     Ok(())
@@ -127,14 +136,23 @@ pub async fn stop_sharing(state: State<'_, AppState>) -> Result<(), String> {
         (None, None, None)
     };
 
-    if let Some(ref p) = state.ollama_provider {
-        p.set_endpoint(ollama_ep).await;
+    {
+        let guard = state.ollama_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(ollama_ep).await;
+        }
     }
-    if let Some(ref p) = state.lmstudio_provider {
-        p.set_endpoint(lmstudio_ep).await;
+    {
+        let guard = state.lmstudio_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(lmstudio_ep).await;
+        }
     }
-    if let Some(ref p) = state.remote_stt_provider {
-        p.set_endpoint(whisper_ep).await;
+    {
+        let guard = state.remote_stt_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(whisper_ep).await;
+        }
     }
 
     Ok(())
@@ -300,14 +318,23 @@ pub async fn pair_with_server(
         bearer: bearer.clone(),
     });
 
-    if let Some(ref p) = state.ollama_provider {
-        p.set_endpoint(ollama_ep).await;
+    {
+        let guard = state.ollama_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(ollama_ep).await;
+        }
     }
-    if let Some(ref p) = state.lmstudio_provider {
-        p.set_endpoint(lmstudio_ep).await;
+    {
+        let guard = state.lmstudio_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(lmstudio_ep).await;
+        }
     }
-    if let Some(ref p) = state.remote_stt_provider {
-        p.set_endpoint(whisper_ep).await;
+    {
+        let guard = state.remote_stt_provider.read().await;
+        if let Some(ref p) = *guard {
+            p.set_endpoint(whisper_ep).await;
+        }
     }
 
     Ok(())

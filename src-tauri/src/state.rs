@@ -179,11 +179,13 @@ pub struct AppState {
     pub sharing: Arc<RwLock<Option<Arc<medical_sharing::SharingService>>>>,
     // ── Typed provider handles for runtime endpoint updates ──────────────────
     /// Concrete Ollama provider reference; allows `set_endpoint` after startup.
-    pub ollama_provider: Option<Arc<OllamaProvider>>,
+    /// Wrapped in `RwLock` so `reinit_providers` / `download_model` can replace
+    /// the Arc after a full reinit, keeping registry and typed handle in sync.
+    pub ollama_provider: RwLock<Option<Arc<OllamaProvider>>>,
     /// Concrete LM Studio provider reference; allows `set_endpoint` after startup.
-    pub lmstudio_provider: Option<Arc<LmStudioProvider>>,
+    pub lmstudio_provider: RwLock<Option<Arc<LmStudioProvider>>>,
     /// Concrete RemoteSttProvider reference; `None` when STT mode is Local.
-    pub remote_stt_provider: Option<Arc<medical_stt_providers::remote_provider::RemoteSttProvider>>,
+    pub remote_stt_provider: RwLock<Option<Arc<medical_stt_providers::remote_provider::RemoteSttProvider>>>,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -511,9 +513,9 @@ impl AppState {
             }
         }
 
-        let ollama_provider = ai_handles.ollama.take();
-        let lmstudio_provider = ai_handles.lmstudio.take();
-        let remote_stt_provider = stt_handles.remote.clone();
+        let ollama_provider = RwLock::new(ai_handles.ollama.take());
+        let lmstudio_provider = RwLock::new(ai_handles.lmstudio.take());
+        let remote_stt_provider = RwLock::new(stt_handles.remote.clone());
 
         // --- RAG subsystem ---
         let embedding_host = if config_ref.ollama_host.is_empty() {

@@ -37,38 +37,36 @@ pub async fn reinit_providers(
     };
 
     // Rebuild AI providers with current config (includes LM Studio host/port).
-    // Clone the endpoints so we can re-use them below to sync the typed handles.
-    let mut ai_handles = state::init_ai_providers(&config, ollama_ep.clone(), lmstudio_ep.clone());
+    let mut ai_handles = state::init_ai_providers(&config, ollama_ep, lmstudio_ep);
 
     // Restore the user's active provider preference from saved settings
     // so reinit doesn't silently switch to a random provider.
     ai_handles.registry.set_active(&config.ai_provider);
 
     let available = ai_handles.registry.list_available();
+
+    // Destructure before any partial moves so all fields remain accessible.
+    let state::AiProviderHandles { registry, ollama: new_ollama, lmstudio: new_lmstudio } = ai_handles;
     {
         let mut guard = state.ai_providers.lock().await;
-        *guard = ai_handles.registry;
+        *guard = registry;
     }
 
     // Rebuild STT provider based on current config (mode + whisper model + remote host/port/key).
-    let stt_handles = state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep.clone());
+    let stt_handles = state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep);
+    let state::SttProviderHandles { provider: new_stt_provider, remote: new_remote_stt } = stt_handles;
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt_handles.provider;
+        *guard = new_stt_provider;
     }
 
-    // Keep the typed provider handles in sync with the freshly rebuilt endpoints
-    // so subsequent set_endpoint calls (e.g. from start_sharing / pair_with_server)
-    // hit the active configuration rather than stale Arcs from the previous init.
-    if let Some(ref p) = state.ollama_provider {
-        p.set_endpoint(ollama_ep).await;
-    }
-    if let Some(ref p) = state.lmstudio_provider {
-        p.set_endpoint(lmstudio_ep).await;
-    }
-    if let Some(ref p) = state.remote_stt_provider {
-        p.set_endpoint(whisper_ep).await;
-    }
+    // Replace the typed handles with the freshly built Arcs so the handles
+    // and the registry point at the SAME Arc instances.  Any subsequent
+    // set_endpoint call (e.g. from start_sharing / pair_with_server) now
+    // mutates the provider that is actually in the request path.
+    *state.ollama_provider.write().await = new_ollama;
+    *state.lmstudio_provider.write().await = new_lmstudio;
+    *state.remote_stt_provider.write().await = new_remote_stt;
 
     info!(providers = ?available, "Providers reinitialized");
 
