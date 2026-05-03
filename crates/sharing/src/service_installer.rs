@@ -44,11 +44,16 @@ mod macos {
         std::fs::create_dir_all(path.parent().unwrap())
             .map_err(SharingError::Io)?;
         std::fs::write(&path, plist).map_err(SharingError::Io)?;
-        std::process::Command::new("launchctl")
+        let status = std::process::Command::new("launchctl")
             .args(["load", "-w"])
             .arg(&path)
             .status()
             .map_err(SharingError::Io)?;
+        if !status.success() {
+            return Err(SharingError::ServiceInstaller(format!(
+                "launchctl load exited with {}", status
+            )));
+        }
         Ok(())
     }
 
@@ -110,7 +115,7 @@ mod windows {
     use super::*;
 
     pub fn install() -> Result<(), SharingError> {
-        let xml = r#"<?xml version="1.0" encoding="UTF-16"?>
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
   <Actions Context="Author">
@@ -123,12 +128,17 @@ mod windows {
         let dir = std::env::temp_dir();
         let xml_path = dir.join("ferriscribe-ollama.xml");
         std::fs::write(&xml_path, xml).map_err(SharingError::Io)?;
-        std::process::Command::new("schtasks")
+        let status = std::process::Command::new("schtasks")
             .args(["/Create", "/TN", "FerriScribe Ollama", "/XML"])
             .arg(&xml_path)
             .args(["/F"])
             .status()
             .map_err(SharingError::Io)?;
+        if !status.success() {
+            return Err(SharingError::ServiceInstaller(format!(
+                "schtasks /Create exited with {}", status
+            )));
+        }
         Ok(())
     }
 
