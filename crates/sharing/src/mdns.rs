@@ -135,8 +135,11 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "requires multicast / local network — run manually"]
     async fn advertise_then_browse_finds_self() {
+        if std::env::var("FERRISCRIBE_MDNS_TEST").ok().as_deref() != Some("1") {
+            eprintln!("skipping: set FERRISCRIBE_MDNS_TEST=1 to run mDNS smoke test");
+            return;
+        }
         let ports = ServerPorts {
             ollama: Some(11435),
             whisper: Some(8081),
