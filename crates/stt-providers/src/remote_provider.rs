@@ -36,6 +36,10 @@ pub struct RemoteSttProvider {
     client: Client,
     base_url: String,
     model: String,
+    /// Bearer token sent as `Authorization: Bearer <token>`. Semantically
+    /// this is a bearer credential (for the auth proxy in paired mode), not
+    /// a whisper.cpp `--api-key`. The field name `api_key` is preserved to
+    /// avoid churn at existing call sites; Task 13 will wire the real bearer.
     api_key: Option<String>,
     segmentation_model_path: PathBuf,
     embedding_model_path: PathBuf,

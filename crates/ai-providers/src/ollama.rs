@@ -21,12 +21,12 @@ impl OllamaProvider {
     /// Create a new Ollama provider.
     ///
     /// `host` defaults to `http://localhost:11434` when `None`.
+    /// `bearer` is an optional bearer token for auth-proxied remote connections.
     /// `policy` controls retry behavior for inner HTTP calls.
     /// Returns `Err(AppError::AiProvider)` if the reqwest client can't be built.
-    pub fn new(host: Option<&str>, policy: RetryConfig) -> AppResult<Self> {
+    pub fn new(host: Option<&str>, bearer: Option<String>, policy: RetryConfig) -> AppResult<Self> {
         let base = host.unwrap_or("http://localhost:11434");
         let base_url = format!("{base}/v1");
-        // No auth header for Ollama.
         let http = Client::builder()
             .pool_max_idle_per_host(5)
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -34,7 +34,7 @@ impl OllamaProvider {
             .build()
             .map_err(|e| AppError::AiProvider(format!("Failed to build Ollama HTTP client: {e}")))?;
         Ok(Self {
-            client: OpenAiCompatibleClient::new(http, base_url, policy),
+            client: OpenAiCompatibleClient::new_with_bearer(http, base_url, policy, bearer),
         })
     }
 }
@@ -103,17 +103,30 @@ mod tests {
 
     #[test]
     fn creates_with_default_host() {
-        let p = OllamaProvider::new(None, RetryConfig::default()).expect("build default provider");
+        let p = OllamaProvider::new(None, None, RetryConfig::default()).expect("build default provider");
         assert_eq!(p.client.base_url, "http://localhost:11434/v1");
+        assert!(p.client.bearer.is_none());
     }
 
     #[test]
     fn creates_with_custom_host() {
         let p = OllamaProvider::new(
             Some("http://192.168.1.10:11434"),
+            None,
             RetryConfig::default(),
         )
         .expect("build custom provider");
         assert_eq!(p.client.base_url, "http://192.168.1.10:11434/v1");
+    }
+
+    #[test]
+    fn stores_bearer_token() {
+        let p = OllamaProvider::new(
+            None,
+            Some("tok_test".into()),
+            RetryConfig::default(),
+        )
+        .expect("build provider with bearer");
+        assert_eq!(p.client.bearer.as_deref(), Some("tok_test"));
     }
 }

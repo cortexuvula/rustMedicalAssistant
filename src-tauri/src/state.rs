@@ -191,7 +191,7 @@ pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     // crashing startup, so a weird system HTTP config doesn't brick the app.
     let ollama_host = if config.ollama_host.is_empty() { "localhost" } else { &config.ollama_host };
     let ollama_url = format!("http://{}:{}", ollama_host, config.ollama_port);
-    match OllamaProvider::new(Some(&ollama_url), policy.clone()) {
+    match OllamaProvider::new(Some(&ollama_url), None, policy.clone()) {
         Ok(p) => {
             info!(url = %ollama_url, "Registering Ollama provider");
             registry.register(Arc::new(p));
@@ -202,7 +202,7 @@ pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     // LM Studio — always available (local or remote, no key needed)
     let lmstudio_host = if config.lmstudio_host.is_empty() { "localhost" } else { &config.lmstudio_host };
     let lmstudio_url = format!("http://{}:{}", lmstudio_host, config.lmstudio_port);
-    match LmStudioProvider::new(Some(&lmstudio_url), policy.clone()) {
+    match LmStudioProvider::new(Some(&lmstudio_url), None, policy.clone()) {
         Ok(p) => {
             info!(url = %lmstudio_url, "Registering LM Studio provider");
             registry.register(Arc::new(p));
