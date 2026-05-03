@@ -34,5 +34,12 @@
     "macOS": {
       "entitlements": "./Entitlements.plist"
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["ferriscribe"]
+      }
+    }
   }
 }
