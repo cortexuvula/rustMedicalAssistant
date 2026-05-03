@@ -149,12 +149,14 @@ impl WhisperSupervisor {
             let Some(mut c) = guard.take() else { return; };
             drop(guard);
             tokio::select! {
-                status = c.wait() => {
-                    let _ = status;
-                    if backoff > Duration::from_secs(30) { backoff = Duration::from_secs(30); }
+                _ = c.wait() => {
                     info!("whisper-server exited; restarting in {:?}", backoff);
-                    tokio::time::sleep(backoff).await;
-                    backoff *= 2;
+                    // Wait for the backoff period, but bail immediately if stop fires.
+                    tokio::select! {
+                        _ = tokio::time::sleep(backoff) => {}
+                        _ = self.stop.notified() => { return; }
+                    }
+                    backoff = (backoff * 2).min(Duration::from_secs(60));
                     let bin = match self.binary_dir.read_dir() {
                         Ok(_) => self.binary_dir.join(self.binary_name_for_platform()),
                         Err(_) => return,
