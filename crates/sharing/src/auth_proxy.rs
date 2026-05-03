@@ -33,24 +33,30 @@ struct AppState {
     store: Arc<TokenStore>,
 }
 
-pub fn spawn_auth_proxy(config: ProxyConfig, store: Arc<TokenStore>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let client = Client::builder()
-            .pool_max_idle_per_host(8)
-            .build()
-            .expect("reqwest client");
-        let state = AppState { config: config.clone(), client, store };
-        let app = Router::new()
-            .fallback(handler)
-            .with_state(state);
-        let listener =
-            tokio::net::TcpListener::bind(("0.0.0.0", config.listen_port))
-                .await
-                .expect("bind proxy");
+/// Bind the listener synchronously (so port conflicts surface immediately as
+/// `Err`) then spawn the serving task. Returns the `JoinHandle` on success.
+pub async fn spawn_auth_proxy(
+    config: ProxyConfig,
+    store: Arc<TokenStore>,
+) -> crate::Result<tokio::task::JoinHandle<()>> {
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.listen_port))
+        .await
+        .map_err(|e| crate::SharingError::AuthProxy(format!(
+            "bind 0.0.0.0:{}: {e}", config.listen_port
+        )))?;
+    let client = Client::builder()
+        .pool_max_idle_per_host(8)
+        .build()
+        .map_err(|e| crate::SharingError::AuthProxy(e.to_string()))?;
+    let state = AppState { config: config.clone(), client, store };
+    let app = Router::new()
+        .fallback(handler)
+        .with_state(state);
+    Ok(tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             warn!("auth_proxy serve exited: {e}");
         }
-    })
+    }))
 }
 
 async fn handler(State(state): State<AppState>, req: Request) -> Response {
@@ -73,9 +79,11 @@ async fn handle_inner(state: AppState, req: Request) -> Result<Response, StatusC
     let _ = state.store.touch(client_id);
 
     let (parts, body) = req.into_parts();
-    let body_bytes = axum::body::to_bytes(body, usize::MAX)
+
+    const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
+    let body_bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
         .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
 
     let path_query = parts
         .uri
@@ -111,8 +119,13 @@ async fn handle_inner(state: AppState, req: Request) -> Result<Response, StatusC
             resp_headers.insert(k.clone(), hv);
         }
     }
-    let bytes = upstream.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let mut resp = Response::new(Body::from(bytes));
+
+    use futures_util::TryStreamExt;
+    let stream = upstream
+        .bytes_stream()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let body = Body::from_stream(stream);
+    let mut resp = Response::new(body);
     *resp.status_mut() = status;
     *resp.headers_mut() = resp_headers;
     Ok(resp)

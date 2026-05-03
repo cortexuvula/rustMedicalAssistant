@@ -106,7 +106,7 @@ impl SharingService {
         let mut running = self.running.lock().await;
         if *running { return Ok(()); }
 
-        // Ollama auth proxy
+        // Ollama auth proxy — bind first so port conflicts surface as errors.
         let h1 = spawn_auth_proxy(
             ProxyConfig {
                 listen_port: self.config.ollama_proxy_port,
@@ -115,9 +115,9 @@ impl SharingService {
                 inject_api_key: None,
             },
             self.store.clone(),
-        );
+        ).await?;
 
-        // Whisper auth proxy
+        // Whisper auth proxy — bind first.
         let h2 = spawn_auth_proxy(
             ProxyConfig {
                 listen_port: self.config.whisper_proxy_port,
@@ -126,7 +126,7 @@ impl SharingService {
                 inject_api_key: Some(self.config.whisper_internal_api_key.clone()),
             },
             self.store.clone(),
-        );
+        ).await?;
 
         // Whisper child
         self.whisper
@@ -147,8 +147,12 @@ impl SharingService {
         )?;
         *self.mdns.lock().await = Some(mdns);
 
-        // Pairing HTTP service
-        let h3 = spawn_pairing_service(self.config.pairing_port, self.pairing.clone(), self.store.clone());
+        // Pairing HTTP service — bind first so port conflicts surface as errors.
+        let h3 = spawn_pairing_service(
+            self.config.pairing_port,
+            self.pairing.clone(),
+            self.store.clone(),
+        ).await?;
 
         let mut handles = self.handles.lock().await;
         handles.push(h1);
@@ -190,12 +194,13 @@ impl SharingService {
     }
 }
 
-fn spawn_pairing_service(
+async fn spawn_pairing_service(
     port: u16,
     pairing: Arc<PairingState>,
     store: Arc<TokenStore>,
-) -> tokio::task::JoinHandle<()> {
-    use axum::{Json, Router, extract::State, routing::{get, post}};
+) -> crate::Result<tokio::task::JoinHandle<()>> {
+    use std::net::SocketAddr;
+    use axum::{Json, Router, extract::{ConnectInfo, State}, routing::{get, post}};
     use serde::{Deserialize, Serialize};
 
     #[derive(Clone)]
@@ -221,7 +226,14 @@ fn spawn_pairing_service(
     #[derive(Serialize)]
     struct ClientView { id: i64, label: String }
 
-    async fn list_clients(State(st): State<St>) -> Json<Vec<ClientView>> {
+    /// Admin endpoint: list paired clients. Loopback-only.
+    async fn list_clients(
+        State(st): State<St>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ) -> Result<Json<Vec<ClientView>>, axum::http::StatusCode> {
+        if !addr.ip().is_loopback() {
+            return Err(axum::http::StatusCode::FORBIDDEN);
+        }
         let v = st
             .store
             .list()
@@ -229,13 +241,18 @@ fn spawn_pairing_service(
             .into_iter()
             .map(|r| ClientView { id: r.id, label: r.label })
             .collect();
-        Json(v)
+        Ok(Json(v))
     }
 
+    /// Admin endpoint: revoke a client. Loopback-only.
     async fn revoke(
         State(st): State<St>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
         axum::extract::Path(id): axum::extract::Path<i64>,
     ) -> axum::http::StatusCode {
+        if !addr.ip().is_loopback() {
+            return axum::http::StatusCode::FORBIDDEN;
+        }
         match st.store.revoke(id) {
             Ok(_) => axum::http::StatusCode::NO_CONTENT,
             Err(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -248,10 +265,15 @@ fn spawn_pairing_service(
         .route("/pair/clients", get(list_clients))
         .route("/pair/revoke/:id", post(revoke))
         .with_state(st);
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-            .await
-            .expect("bind pairing");
-        let _ = axum::serve(listener, app).await;
-    })
+
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
+        .await
+        .map_err(|e| crate::SharingError::Pairing(format!("bind 0.0.0.0:{port}: {e}")))?;
+
+    Ok(tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        ).await;
+    }))
 }

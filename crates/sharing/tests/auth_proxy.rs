@@ -36,7 +36,7 @@ async fn missing_bearer_returns_401() {
         path_prefix: "/api".to_string(),
         inject_api_key: None,
     };
-    spawn_auth_proxy(cfg, store.clone());
+    spawn_auth_proxy(cfg, store.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let resp = reqwest::Client::new()
@@ -64,7 +64,7 @@ async fn valid_bearer_forwards_body() {
         path_prefix: "/api".to_string(),
         inject_api_key: None,
     };
-    spawn_auth_proxy(cfg, store.clone());
+    spawn_auth_proxy(cfg, store.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let resp = reqwest::Client::new()
@@ -95,7 +95,7 @@ async fn revoked_bearer_returns_401() {
         path_prefix: "/api".to_string(),
         inject_api_key: None,
     };
-    spawn_auth_proxy(cfg, store.clone());
+    spawn_auth_proxy(cfg, store.clone()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let resp = reqwest::Client::new()
