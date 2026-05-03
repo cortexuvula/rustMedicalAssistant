@@ -219,6 +219,8 @@ pub fn run() {
             commands::sharing::revoke_client,
             commands::sharing::discover_servers,
             commands::sharing::pair_with_server,
+            commands::sharing::paired_endpoint,
+            commands::sharing::unpair,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

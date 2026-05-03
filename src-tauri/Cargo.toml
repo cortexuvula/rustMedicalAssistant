@@ -50,6 +50,7 @@ medical-sharing = { path = "../crates/sharing" }
 rand = "0.8"
 hex = "0.4"
 reqwest = { workspace = true }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [dev-dependencies]
 tempfile = "3"

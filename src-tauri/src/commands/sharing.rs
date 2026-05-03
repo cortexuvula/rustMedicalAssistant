@@ -3,7 +3,7 @@ use std::sync::Arc;
 use medical_sharing::mdns::DiscoveredServer;
 use medical_sharing::qr::{PairPayload, PairPorts, encode};
 use medical_sharing::{SharingConfig, SharingService, SharingStatus};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::state::AppState;
@@ -29,6 +29,23 @@ impl From<SharingStatus> for SharingStatusDto {
             paired_clients: s.paired_clients,
         }
     }
+}
+
+/// Non-secret connection metadata persisted across restarts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairedConnection {
+    pub lan: Option<String>,
+    pub tailscale: Option<String>,
+    pub ports: PairPorts,
+    pub label: String,
+}
+
+fn paired_connection_path() -> Result<std::path::PathBuf, String> {
+    let app_data = dirs::data_dir()
+        .ok_or_else(|| "no app data dir".to_string())?
+        .join("rust-medical-assistant");
+    std::fs::create_dir_all(&app_data).map_err(|e| e.to_string())?;
+    Ok(app_data.join("sharing-paired.json"))
 }
 
 #[tauri::command]
@@ -131,27 +148,89 @@ pub async fn discover_servers(timeout_ms: u64) -> Result<Vec<DiscoveredServer>, 
     Ok(out)
 }
 
+/// Pair with an office server: POST the enroll code, receive a bearer token,
+/// persist the token in the OS keychain, and persist the non-secret endpoint
+/// metadata to disk. Returns nothing to the frontend — no raw token is ever
+/// sent to JS.
 #[tauri::command]
 pub async fn pair_with_server(
-    server_url: String,
+    lan: Option<String>,
+    tailscale: Option<String>,
+    ports: PairPorts,
     code: String,
     label: String,
-) -> Result<String, String> {
+) -> Result<(), String> {
+    // Prefer LAN address; fall back to Tailscale.
+    let base = if let Some(ref l) = lan {
+        format!("http://{}:{}", l, ports.pairing)
+    } else if let Some(ref ts) = tailscale {
+        format!("http://{}:{}", ts, ports.pairing)
+    } else {
+        return Err("no reachable address provided".into());
+    };
+
     let body = serde_json::json!({ "code": code, "label": label });
     let resp = reqwest::Client::new()
-        .post(format!("{server_url}/pair/enroll"))
+        .post(format!("{base}/pair/enroll"))
         .json(&body)
         .send()
         .await
         .map_err(|e| e.to_string())?;
+
     if !resp.status().is_success() {
         return Err(format!("server rejected pair: {}", resp.status()));
     }
+
     let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(v.get("token")
+    let token = v
+        .get("token")
         .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "server did not return a token".to_string())?
+        .to_string();
+
+    // Store bearer token in OS keychain.
+    keyring::Entry::new("rustMedicalAssistant", "sharing-bearer")
+        .map_err(|e| format!("keychain open: {e}"))?
+        .set_password(&token)
+        .map_err(|e| format!("keychain write: {e}"))?;
+
+    // Persist non-secret endpoint metadata.
+    let conn = PairedConnection { lan, tailscale, ports, label };
+    let json = serde_json::to_string(&conn).map_err(|e| e.to_string())?;
+    let path = paired_connection_path()?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Returns the saved paired-connection metadata, or `None` if not paired.
+#[tauri::command]
+pub async fn paired_endpoint() -> Result<Option<PairedConnection>, String> {
+    let path = paired_connection_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let conn: PairedConnection = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    Ok(Some(conn))
+}
+
+/// Remove the keychain entry and the on-disk metadata. Idempotent.
+#[tauri::command]
+pub async fn unpair() -> Result<(), String> {
+    // Remove keychain entry (ignore NoEntry).
+    if let Ok(entry) = keyring::Entry::new("rustMedicalAssistant", "sharing-bearer") {
+        let _ = entry.delete_credential();
+    }
+
+    // Remove the metadata file (ignore not-found).
+    let path = paired_connection_path()?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 async fn build_sharing_config(

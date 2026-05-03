@@ -17,6 +17,12 @@
     } catch {
       sharingOn = false;
     }
+    try {
+      const paired = await invoke<{ label: string } | null>('paired_endpoint');
+      pairedTo = paired?.label ?? null;
+    } catch {
+      pairedTo = null;
+    }
     if (sharingOn) mode = 'server';
     else if (pairedTo) mode = 'client';
     else mode = 'off';

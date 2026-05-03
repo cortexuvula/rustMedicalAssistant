@@ -10,6 +10,8 @@
     version: string;
   };
 
+  type PairPorts = { ollama: number; whisper: number; pairing: number; lmstudio: number | null };
+
   let discovered: Discovered[] = [];
   let scanning = false;
   let pasteUrl = '';
@@ -28,20 +30,23 @@
     }
   }
 
-  async function pairManual(serverUrl: string, code: string) {
+  async function pairManual(
+    lan: string | null,
+    tailscale: string | null,
+    ports: PairPorts,
+    code: string,
+  ) {
     busy = true;
     error = null;
     try {
       const tokenLabel = label || 'this laptop';
-      await invoke<string>('pair_with_server', {
-        serverUrl,
+      await invoke('pair_with_server', {
+        lan,
+        tailscale,
+        ports,
         code,
         label: tokenLabel,
       });
-      // Best-effort: record the label so Task 12 can pick it up.
-      try {
-        localStorage.setItem('ferriscribe_paired_token_label', tokenLabel);
-      } catch {}
       success = true;
     } catch (e) {
       error = String(e);
@@ -58,19 +63,26 @@
     const u = new URL(pasteUrl.replace('ferriscribe://', 'http://x/'));
     const lan = u.searchParams.get('lan');
     const ts = u.searchParams.get('ts');
-    const pp = u.searchParams.get('pp');
+    const op = Number(u.searchParams.get('op') ?? '11435');
+    const wp = Number(u.searchParams.get('wp') ?? '8081');
+    const pp = Number(u.searchParams.get('pp') ?? '11436');
+    const lp = u.searchParams.has('lp') ? Number(u.searchParams.get('lp')) : null;
     const code = u.searchParams.get('code') ?? '';
-    const base = lan ? `http://${lan}:${pp}` : ts ? `http://${ts}:${pp}` : '';
-    if (!base) { error = 'No reachable address in URL'; return; }
-    pairManual(base, code);
+    if (!lan && !ts) { error = 'No reachable address in URL'; return; }
+    pairManual(lan, ts, { ollama: op, whisper: wp, pairing: pp, lmstudio: lp }, code);
   }
 
   function pairDiscovered(d: Discovered) {
-    const lan = d.addresses[0];
-    const port = d.ports.pairing ?? 11436;
+    const lan = d.addresses[0] ?? null;
+    const ports: PairPorts = {
+      ollama: d.ports.ollama ?? 11435,
+      whisper: d.ports.whisper ?? 8081,
+      pairing: d.ports.pairing ?? 11436,
+      lmstudio: d.ports.lmstudio ?? null,
+    };
     const code = prompt('Enter the 6-digit code from the office server.') ?? '';
     if (!code) return;
-    pairManual(`http://${lan}:${port}`, code);
+    pairManual(lan, null, ports, code);
   }
 
   function onPairUrlEvent(e: Event) {
