@@ -243,8 +243,10 @@ async fn build_sharing_config(
     // Reuse the SQLCipher DB key as the sharing-store key — same keychain
     // entry, no new secret to manage.
     let key = keychain::get_db_key()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "db key missing from keychain".to_string())?;
+        .map_err(|e| format!("Keychain access denied: {e}. Sharing requires keychain access — quit and reopen FerriScribe, then approve the keychain prompt."))?
+        .ok_or_else(|| {
+            "FerriScribe's database hasn't been initialized yet. Restart the app and try again.".to_string()
+        })?;
 
     let app_data = dirs::data_dir()
         .ok_or_else(|| "no app data dir".to_string())?
