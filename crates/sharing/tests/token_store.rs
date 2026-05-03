@@ -68,5 +68,5 @@ fn wrong_key_fails() {
         s.issue("x").unwrap();
     }
     let err = TokenStore::open(&path, &[2u8; 32]).unwrap_err();
-    matches!(err, TokenStoreError::Sqlite(_));
+    assert!(matches!(err, TokenStoreError::Sqlite(_)));
 }
