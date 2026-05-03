@@ -63,13 +63,32 @@
     const u = new URL(pasteUrl.replace('ferriscribe://', 'http://x/'));
     const lan = u.searchParams.get('lan');
     const ts = u.searchParams.get('ts');
-    const op = Number(u.searchParams.get('op') ?? '11435');
-    const wp = Number(u.searchParams.get('wp') ?? '8081');
-    const pp = Number(u.searchParams.get('pp') ?? '11436');
-    const lp = u.searchParams.has('lp') ? Number(u.searchParams.get('lp')) : null;
     const code = u.searchParams.get('code') ?? '';
+
+    const ppRaw = u.searchParams.get('pp');
+    const pp = ppRaw ? parseInt(ppRaw, 10) : NaN;
+    if (!Number.isFinite(pp) || pp <= 0 || pp > 65535) {
+      error = 'Pairing URL is missing a valid pairing port (pp).';
+      return;
+    }
+
+    const op = parseInt(u.searchParams.get('op') ?? '', 10);
+    const wp = parseInt(u.searchParams.get('wp') ?? '', 10);
+    if (!Number.isFinite(op) || !Number.isFinite(wp)) {
+      error = 'Pairing URL is missing required ports (op or wp).';
+      return;
+    }
+
+    const lpRaw = u.searchParams.get('lp');
+    const lp = lpRaw ? parseInt(lpRaw, 10) : null;
+
     if (!lan && !ts) { error = 'No reachable address in URL'; return; }
-    pairManual(lan, ts, { ollama: op, whisper: wp, pairing: pp, lmstudio: lp }, code);
+    pairManual(lan, ts, {
+      ollama: op,
+      whisper: wp,
+      pairing: pp,
+      lmstudio: lp !== null && Number.isFinite(lp) ? lp : null,
+    }, code);
   }
 
   function pairDiscovered(d: Discovered) {
