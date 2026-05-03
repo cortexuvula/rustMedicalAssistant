@@ -112,10 +112,19 @@ variables.
 1. Install FerriScribe.
 2. Open **Settings → Sharing** → **This machine is the office server** →
    **Start sharing**. The wizard installs a persistent Ollama service,
-   downloads whisper.cpp, and shows a pairing screen with a QR code and
-   a 6-digit code.
+   downloads whisper.cpp (Windows only — see note below), and shows a pairing
+   screen with a QR code and a 6-digit code.
 3. If LM Studio is installed, open it and click **Start Server** in its
    Local Server tab. (FerriScribe doesn't manage LM Studio's toggle.)
+
+> **macOS / Linux whisper-server:** whisper.cpp does not currently ship prebuilt
+> `whisper-server` binaries for macOS or Linux. Office-server admins on those
+> platforms must build it from source
+> (`cmake -B build && cmake --build build --target whisper-server -j`)
+> and place the resulting binary in the FerriScribe app-data `bin/` directory
+> before starting sharing. See https://github.com/ggml-org/whisper.cpp#server
+> for full build instructions. Windows office servers download the binary
+> automatically.
 
 ### On each clinician's laptop
 

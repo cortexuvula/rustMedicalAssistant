@@ -59,6 +59,41 @@ pub async fn start_sharing(
     let service = Arc::new(SharingService::new(cfg).map_err(|e| e.to_string())?);
     service.start().await.map_err(|e| e.to_string())?;
     *state.sharing.write().await = Some(service);
+
+    // Heavy-box routing: this machine IS the office server, so route AI/STT
+    // calls to the upstream services on localhost directly — no proxy hop, no
+    // bearer needed. Ports are the upstream ports (Ollama 11434, LM Studio 1234,
+    // whisper.cpp 8080), NOT the proxy ports (11435 / 8081).
+    use medical_core::types::RemoteEndpoint;
+    let local_ollama = Some(RemoteEndpoint {
+        lan: Some("127.0.0.1".to_string()),
+        tailscale: None,
+        port: 11434,
+        bearer: None,
+    });
+    let local_lmstudio = Some(RemoteEndpoint {
+        lan: Some("127.0.0.1".to_string()),
+        tailscale: None,
+        port: 1234,
+        bearer: None,
+    });
+    let local_whisper = Some(RemoteEndpoint {
+        lan: Some("127.0.0.1".to_string()),
+        tailscale: None,
+        port: 8080,
+        bearer: None,
+    });
+
+    if let Some(ref p) = state.ollama_provider {
+        p.set_endpoint(local_ollama).await;
+    }
+    if let Some(ref p) = state.lmstudio_provider {
+        p.set_endpoint(local_lmstudio).await;
+    }
+    if let Some(ref p) = state.remote_stt_provider {
+        p.set_endpoint(local_whisper).await;
+    }
+
     Ok(())
 }
 
@@ -67,6 +102,34 @@ pub async fn stop_sharing(state: State<'_, AppState>) -> Result<(), String> {
     if let Some(s) = state.sharing.write().await.take() {
         s.stop().await.map_err(|e| e.to_string())?;
     }
+
+    // Restore provider endpoints to pre-sharing configuration.
+    // If this machine is also paired as a client to another server, restore the
+    // paired endpoint; otherwise revert to None (local-only mode).
+    let paired = crate::state::load_paired_connection();
+    let bearer = if paired.is_some() { crate::state::load_sharing_bearer() } else { None };
+
+    use medical_core::types::RemoteEndpoint;
+    let (ollama_ep, lmstudio_ep, whisper_ep) = if let Some(ref p) = paired {
+        (
+            Some(RemoteEndpoint { lan: p.lan.clone(), tailscale: p.tailscale.clone(), port: p.ports.ollama, bearer: bearer.clone() }),
+            p.ports.lmstudio.map(|lp| RemoteEndpoint { lan: p.lan.clone(), tailscale: p.tailscale.clone(), port: lp, bearer: bearer.clone() }),
+            Some(RemoteEndpoint { lan: p.lan.clone(), tailscale: p.tailscale.clone(), port: p.ports.whisper, bearer }),
+        )
+    } else {
+        (None, None, None)
+    };
+
+    if let Some(ref p) = state.ollama_provider {
+        p.set_endpoint(ollama_ep).await;
+    }
+    if let Some(ref p) = state.lmstudio_provider {
+        p.set_endpoint(lmstudio_ep).await;
+    }
+    if let Some(ref p) = state.remote_stt_provider {
+        p.set_endpoint(whisper_ep).await;
+    }
+
     Ok(())
 }
 

@@ -12,6 +12,7 @@ use medical_ai_providers::http_client::RetryConfig;
 use medical_ai_providers::ProviderRegistry;
 
 use medical_core::types::settings::AppConfig;
+use medical_core::types::RemoteEndpoint;
 
 use medical_agents::orchestrator::AgentOrchestrator;
 use medical_agents::tools::{RagSearchTool, ToolRegistry};
@@ -176,25 +177,80 @@ pub struct AppState {
     pub ingestion: Arc<IngestionPipeline>,
     /// Lazy-initialized sharing service. `None` until `start_sharing` is called.
     pub sharing: Arc<RwLock<Option<Arc<medical_sharing::SharingService>>>>,
+    // ── Typed provider handles for runtime endpoint updates ──────────────────
+    /// Concrete Ollama provider reference; allows `set_endpoint` after startup.
+    pub ollama_provider: Option<Arc<OllamaProvider>>,
+    /// Concrete LM Studio provider reference; allows `set_endpoint` after startup.
+    pub lmstudio_provider: Option<Arc<LmStudioProvider>>,
+    /// Concrete RemoteSttProvider reference; `None` when STT mode is Local.
+    pub remote_stt_provider: Option<Arc<medical_stt_providers::remote_provider::RemoteSttProvider>>,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Paired-endpoint helpers — read the on-disk pairing metadata and keychain
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Load the persisted `PairedConnection` from disk (non-secret endpoint metadata).
+/// Returns `None` if this machine has never paired with an office server or the
+/// file can't be read.
+pub fn load_paired_connection() -> Option<crate::commands::sharing::PairedConnection> {
+    let path = dirs::data_dir()?
+        .join("rust-medical-assistant")
+        .join("sharing-paired.json");
+    if !path.exists() {
+        return None;
+    }
+    let json = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&json).ok()
+}
+
+/// Load the bearer token stored in the OS keychain after pairing.
+/// Returns `None` if not paired or the keychain entry is absent.
+pub fn load_sharing_bearer() -> Option<String> {
+    keyring::Entry::new("rustMedicalAssistant", "sharing-bearer")
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// The return type of `init_ai_providers`, bundling the registry with typed
+/// Arc handles so callers can update endpoints after startup.
+pub struct AiProviderHandles {
+    pub registry: ProviderRegistry,
+    pub ollama: Option<Arc<OllamaProvider>>,
+    pub lmstudio: Option<Arc<LmStudioProvider>>,
 }
 
 /// Register all supported AI providers (LM Studio + Ollama).
 ///
-/// Both providers are local and keyless; `config` supplies LM Studio's
-/// host/port.
-pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
+/// `config` supplies host/port; `ollama_ep` / `lmstudio_ep` override with a
+/// `RemoteEndpoint` for LAN/Tailscale resolution when this machine is a paired
+/// client. Pass `None` for local-only (default) mode.
+pub fn init_ai_providers(
+    config: &AppConfig,
+    ollama_ep: Option<RemoteEndpoint>,
+    lmstudio_ep: Option<RemoteEndpoint>,
+) -> AiProviderHandles {
     let mut registry = ProviderRegistry::new();
     let policy = RetryConfig::from_app_config(config);
+    let mut ollama_handle: Option<Arc<OllamaProvider>> = None;
+    let mut lmstudio_handle: Option<Arc<LmStudioProvider>> = None;
 
     // Ollama — always available (local, no key needed).
     // Builder failures are logged and the provider skipped rather than
     // crashing startup, so a weird system HTTP config doesn't brick the app.
     let ollama_host = if config.ollama_host.is_empty() { "localhost" } else { &config.ollama_host };
     let ollama_url = format!("http://{}:{}", ollama_host, config.ollama_port);
-    match OllamaProvider::new(Some(&ollama_url), None, policy.clone()) {
+    // Bearer is taken from the endpoint (if set) for proxied remote connections.
+    let ollama_bearer = ollama_ep.as_ref().and_then(|ep| ep.bearer.clone());
+    match OllamaProvider::new_with_endpoint(Some(&ollama_url), ollama_bearer, policy.clone(), ollama_ep) {
         Ok(p) => {
             info!(url = %ollama_url, "Registering Ollama provider");
-            registry.register(Arc::new(p));
+            let arc = Arc::new(p);
+            registry.register(Arc::clone(&arc) as Arc<dyn medical_core::traits::AiProvider>);
+            ollama_handle = Some(arc);
         }
         Err(e) => tracing::error!(error = %e, url = %ollama_url, "Failed to build Ollama provider; skipping"),
     }
@@ -202,23 +258,38 @@ pub fn init_ai_providers(config: &AppConfig) -> ProviderRegistry {
     // LM Studio — always available (local or remote, no key needed)
     let lmstudio_host = if config.lmstudio_host.is_empty() { "localhost" } else { &config.lmstudio_host };
     let lmstudio_url = format!("http://{}:{}", lmstudio_host, config.lmstudio_port);
-    match LmStudioProvider::new(Some(&lmstudio_url), None, policy.clone()) {
+    let lmstudio_bearer = lmstudio_ep.as_ref().and_then(|ep| ep.bearer.clone());
+    match LmStudioProvider::new_with_endpoint(Some(&lmstudio_url), lmstudio_bearer, policy.clone(), lmstudio_ep) {
         Ok(p) => {
             info!(url = %lmstudio_url, "Registering LM Studio provider");
-            registry.register(Arc::new(p));
+            let arc = Arc::new(p);
+            registry.register(Arc::clone(&arc) as Arc<dyn medical_core::traits::AiProvider>);
+            lmstudio_handle = Some(arc);
         }
         Err(e) => tracing::error!(error = %e, url = %lmstudio_url, "Failed to build LM Studio provider; skipping"),
     }
 
     info!("AI providers available: {:?}", registry.list_available());
-    registry
+    AiProviderHandles { registry, ollama: ollama_handle, lmstudio: lmstudio_handle }
+}
+
+/// The return type of `init_stt_providers_with_config`, bundling the trait
+/// object with a typed Arc handle for runtime endpoint updates.
+pub struct SttProviderHandles {
+    pub provider: Option<Arc<dyn SttProvider + Send + Sync>>,
+    /// Non-`None` only when `stt_mode` is `Remote`; enables `set_endpoint`.
+    pub remote: Option<Arc<medical_stt_providers::remote_provider::RemoteSttProvider>>,
 }
 
 /// Create the STT provider based on the user's chosen mode.
+///
+/// `whisper_ep` overrides the remote STT server address with a `RemoteEndpoint`
+/// for LAN/Tailscale resolution. Pass `None` for local-only or static-address mode.
 pub fn init_stt_providers_with_config(
     data_dir: &std::path::Path,
     config: &medical_core::types::settings::AppConfig,
-) -> Option<Arc<dyn SttProvider + Send + Sync>> {
+    whisper_ep: Option<RemoteEndpoint>,
+) -> SttProviderHandles {
     let seg_path = stt_models::pyannote_model_path(data_dir, "segmentation-3.0.onnx");
     let emb_path = stt_models::pyannote_model_path(data_dir, "wespeaker_en_voxceleb_CAM++.onnx");
 
@@ -233,11 +304,14 @@ pub fn init_stt_providers_with_config(
                 embedding = %emb_path.display(),
                 "Initializing local STT provider"
             );
-            Some(Arc::new(medical_stt_providers::local_provider::LocalSttProvider::new(
-                whisper_path,
-                seg_path,
-                emb_path,
-            )))
+            SttProviderHandles {
+                provider: Some(Arc::new(medical_stt_providers::local_provider::LocalSttProvider::new(
+                    whisper_path,
+                    seg_path,
+                    emb_path,
+                ))),
+                remote: None,
+            }
         }
         medical_core::types::settings::SttMode::Remote => {
             // Load the remote API key from the keychain if present. A miss is
@@ -246,27 +320,36 @@ pub fn init_stt_providers_with_config(
             let api_key = medical_security::key_storage::KeyStorage::open(&data_dir.join("config"))
                 .ok()
                 .and_then(|ks| ks.get_key("stt_remote_api_key").ok().flatten());
+            // Bearer from the whisper endpoint (if set) overrides the keychain api_key.
+            let bearer = whisper_ep.as_ref().and_then(|ep| ep.bearer.clone()).or(api_key);
 
             info!(
                 host = %config.stt_remote_host,
                 port = config.stt_remote_port,
                 model = %config.stt_remote_model,
-                has_api_key = api_key.is_some(),
+                has_bearer = bearer.is_some(),
                 "Initializing remote STT provider"
             );
 
-            match medical_stt_providers::remote_provider::RemoteSttProvider::new(
+            match medical_stt_providers::remote_provider::RemoteSttProvider::new_with_endpoint(
                 &config.stt_remote_host,
                 config.stt_remote_port,
                 &config.stt_remote_model,
-                api_key,
+                bearer,
                 seg_path,
                 emb_path,
+                whisper_ep,
             ) {
-                Ok(p) => Some(Arc::new(p)),
+                Ok(p) => {
+                    let arc = Arc::new(p);
+                    SttProviderHandles {
+                        provider: Some(Arc::clone(&arc) as Arc<dyn SttProvider + Send + Sync>),
+                        remote: Some(arc),
+                    }
+                }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to build remote STT provider");
-                    None
+                    SttProviderHandles { provider: None, remote: None }
                 }
             }
         }
@@ -384,17 +467,53 @@ impl AppState {
         };
         let config_ref = config.as_ref().cloned().unwrap_or_default();
 
-        // Initialize provider registries from saved API keys + config
-        let mut ai_providers = init_ai_providers(&config_ref);
+        // ── Paired-endpoint wiring ───────────────────────────────────────────
+        // If this machine previously paired with an office server, load the
+        // saved endpoint metadata and bearer token so providers can resolve
+        // LAN / Tailscale addresses dynamically.
+        let paired = load_paired_connection();
+        let bearer = if paired.is_some() { load_sharing_bearer() } else { None };
 
-        let stt_providers = init_stt_providers_with_config(&data_dir, &config_ref);
+        let (ollama_ep, lmstudio_ep, whisper_ep) = if let Some(ref p) = paired {
+            (
+                Some(RemoteEndpoint {
+                    lan: p.lan.clone(),
+                    tailscale: p.tailscale.clone(),
+                    port: p.ports.ollama,
+                    bearer: bearer.clone(),
+                }),
+                p.ports.lmstudio.map(|lms_port| RemoteEndpoint {
+                    lan: p.lan.clone(),
+                    tailscale: p.tailscale.clone(),
+                    port: lms_port,
+                    bearer: bearer.clone(),
+                }),
+                Some(RemoteEndpoint {
+                    lan: p.lan.clone(),
+                    tailscale: p.tailscale.clone(),
+                    port: p.ports.whisper,
+                    bearer: bearer.clone(),
+                }),
+            )
+        } else {
+            (None, None, None)
+        };
+
+        // Initialize provider registries from saved API keys + config
+        let mut ai_handles = init_ai_providers(&config_ref, ollama_ep, lmstudio_ep);
+
+        let stt_handles = init_stt_providers_with_config(&data_dir, &config_ref, whisper_ep);
 
         // Set the active AI provider from saved settings
         if let Some(ref cfg) = config {
-            if ai_providers.set_active(&cfg.ai_provider) {
+            if ai_handles.registry.set_active(&cfg.ai_provider) {
                 info!("Active AI provider set to '{}' from settings", cfg.ai_provider);
             }
         }
+
+        let ollama_provider = ai_handles.ollama.take();
+        let lmstudio_provider = ai_handles.lmstudio.take();
+        let remote_stt_provider = stt_handles.remote.clone();
 
         // --- RAG subsystem ---
         let embedding_host = if config_ref.ollama_host.is_empty() {
@@ -436,8 +555,8 @@ impl AppState {
             keys: Arc::new(keys),
             data_dir,
             recording_active: Arc::new(Mutex::new(false)),
-            ai_providers: Arc::new(Mutex::new(ai_providers)),
-            stt_providers: Arc::new(Mutex::new(stt_providers)),
+            ai_providers: Arc::new(Mutex::new(ai_handles.registry)),
+            stt_providers: Arc::new(Mutex::new(stt_handles.provider)),
             orchestrator: Arc::new(orchestrator),
             capture_handle: Arc::new(std::sync::Mutex::new(SendCaptureHandle(None))),
             current_recording: Arc::new(std::sync::Mutex::new(None)),
@@ -448,6 +567,9 @@ impl AppState {
             graph_search,
             ingestion,
             sharing: Arc::new(RwLock::new(None)),
+            ollama_provider,
+            lmstudio_provider,
+            remote_stt_provider,
         })
     }
 }
@@ -462,11 +584,12 @@ mod tests {
         let mut config = AppConfig::default();
         config.ollama_host = "tailnet-node".into();
         config.ollama_port = 11500;
-        let registry = init_ai_providers(&config);
+        let handles = init_ai_providers(&config, None, None);
         assert!(
-            registry.list_available().contains(&"ollama".to_string()),
+            handles.registry.list_available().contains(&"ollama".to_string()),
             "ollama should still be registered with a custom host"
         );
+        assert!(handles.ollama.is_some(), "ollama handle should be populated");
     }
 
     #[test]
@@ -479,9 +602,11 @@ mod tests {
         cfg.stt_remote_model = "whisper-1".into();
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let provider = init_stt_providers_with_config(tmp.path(), &cfg)
-            .expect("provider should be built");
+        let handles = init_stt_providers_with_config(tmp.path(), &cfg, None);
+        let provider = handles.provider.expect("provider should be built");
         assert_eq!(provider.name(), "remote");
+        // Typed handle should be populated for remote mode.
+        assert!(handles.remote.is_some(), "remote handle should be set");
     }
 
     #[test]
@@ -492,8 +617,9 @@ mod tests {
         cfg.whisper_model = "large-v3-turbo".into();
 
         let tmp = tempfile::tempdir().expect("tempdir");
-        let provider = init_stt_providers_with_config(tmp.path(), &cfg)
-            .expect("provider should be built");
+        let handles = init_stt_providers_with_config(tmp.path(), &cfg, None);
+        let provider = handles.provider.expect("provider should be built");
         assert_eq!(provider.name(), "local");
+        assert!(handles.remote.is_none(), "no remote handle for local mode");
     }
 }

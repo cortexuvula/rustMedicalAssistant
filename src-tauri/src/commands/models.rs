@@ -85,10 +85,10 @@ pub async fn download_model(
         cfg.migrate();
         cfg
     };
-    let stt = crate::state::init_stt_providers_with_config(&state.data_dir, &config);
+    let stt_handles = crate::state::init_stt_providers_with_config(&state.data_dir, &config, None);
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt;
+        *guard = stt_handles.provider;
     }
 
     Ok(())

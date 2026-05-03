@@ -1,4 +1,14 @@
 //! whisper.cpp child process supervisor + on-demand binary download.
+//!
+//! # Platform support
+//!
+//! As of v1.7.6, whisper.cpp (now under the ggml-org GitHub organisation) ships
+//! prebuilt server binaries **only for Windows x86_64** (inside `whisper-bin-x64.zip`).
+//! macOS and Linux office-server admins must build `whisper-server` from source:
+//!   <https://github.com/ggml-org/whisper.cpp#server>
+//!
+//! The supervisor returns [`WhisperError::UnsupportedPlatform`] when `url` is
+//! `null` in the manifest (i.e. no prebuilt binary is available for this OS).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -20,11 +30,16 @@ struct Manifest {
     binaries: std::collections::HashMap<String, BinaryEntry>,
 }
 
+/// A single platform entry in the manifest.
+///
+/// `url` and `archive` are `None` when whisper.cpp does not publish a prebuilt
+/// server binary for that platform. The supervisor surfaces
+/// [`WhisperError::UnsupportedPlatform`] in that case.
 #[derive(Debug, Deserialize)]
 struct BinaryEntry {
-    url: String,
+    url: Option<String>,
     sha256: Option<String>,
-    archive: String,
+    archive: Option<String>,
     binary_name: String,
 }
 
@@ -83,12 +98,19 @@ impl WhisperSupervisor {
             .binaries
             .get(key)
             .ok_or(WhisperError::UnsupportedPlatform)?;
+
+        // A null `url` means whisper.cpp does not publish a prebuilt server binary
+        // for this platform. Office-server admins must build from source:
+        // https://github.com/ggml-org/whisper.cpp#server
+        let url = entry.url.as_deref().ok_or(WhisperError::UnsupportedPlatform)?;
+        let archive = entry.archive.as_deref().ok_or(WhisperError::UnsupportedPlatform)?;
+
         let bin_path = self.binary_dir.join(&entry.binary_name);
         if bin_path.exists() {
             return Ok(bin_path);
         }
         tokio::fs::create_dir_all(&self.binary_dir).await?;
-        let bytes = reqwest::get(&entry.url)
+        let bytes = reqwest::get(url)
             .await
             .map_err(|e| WhisperError::Download(e.to_string()))?
             .bytes()
@@ -105,7 +127,7 @@ impl WhisperSupervisor {
         } else {
             warn!("sha256 not set for platform {}; skipping verification", key);
         }
-        Self::extract_archive(&bytes, &entry.archive, &self.binary_dir, &entry.binary_name)?;
+        Self::extract_archive(&bytes, archive, &self.binary_dir, &entry.binary_name)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
