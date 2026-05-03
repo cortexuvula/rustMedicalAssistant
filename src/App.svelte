@@ -10,6 +10,7 @@
 
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
+  import StatusBadge from './lib/components/StatusBadge.svelte';
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
   import DatabaseRecoveryDialog from './lib/dialogs/DatabaseRecoveryDialog.svelte';
   import { selectedRecording, selectRecording } from './lib/stores/recordings';
@@ -213,6 +214,7 @@
 
   <footer class="app-statusbar">
     <StatusBar />
+    <StatusBadge />
   </footer>
 
   <ToastContainer onNavigate={navigateToSoap} />

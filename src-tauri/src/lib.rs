@@ -136,6 +136,7 @@ pub fn run() {
     builder = builder.manage(recovery_state);
 
     builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())

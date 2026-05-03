@@ -103,45 +103,50 @@ Models are downloaded from HuggingFace / GitHub and stored under the app's data 
 
 ## Running Across Machines (LAN / Tailscale)
 
-FerriScribe can offload Whisper and Ollama to a more powerful machine reached over your LAN or Tailscale. Diarization still runs on the client so speaker labels are preserved in both modes.
+FerriScribe can run AI on a powerful office computer and connect from
+laptops over the LAN or Tailscale. No terminals, no environment
+variables.
 
-### Whisper server (Computer A)
+### On the office server
 
-Build `whisper.cpp`'s server binary once, then run it against the same model file FerriScribe downloads:
+1. Install FerriScribe.
+2. Open **Settings → Sharing** → **This machine is the office server** →
+   **Start sharing**. The wizard installs a persistent Ollama service,
+   downloads whisper.cpp, and shows a pairing screen with a QR code and
+   a 6-digit code.
+3. If LM Studio is installed, open it and click **Start Server** in its
+   Local Server tab. (FerriScribe doesn't manage LM Studio's toggle.)
 
-```bash
-git clone https://github.com/ggerganov/whisper.cpp
-cd whisper.cpp
-make server
-./server -m /path/to/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8080
-```
+### On each clinician's laptop
 
-In FerriScribe (Computer B), **Settings → Audio / STT** → set **STT Mode** to **Remote**, **Host** to Computer A's hostname or Tailscale name, **Port** to `8080`, **Model** to `whisper-1`. Click **Test connection**.
+1. Install FerriScribe.
+2. Open **Settings → Sharing** → **This machine connects to an office
+   server**. Servers found on the local network appear in the list —
+   click **Connect** and enter the 6-digit code from the office server.
+3. Off-network or remote? Scan the QR or paste the
+   `ferriscribe://pair?...` URL the office server displayed.
 
-Any OpenAI-compatible Whisper server works — `faster-whisper-server`, LocalAI, etc. — just match the host / port / model fields accordingly.
-
-### Ollama (Computer A)
-
-Ollama must bind beyond `localhost` to accept remote connections:
-
-```bash
-OLLAMA_HOST=0.0.0.0:11434 ollama serve
-```
-
-In FerriScribe (Computer B), **Settings → AI Providers → Ollama Server** → set **Host** to Computer A's hostname or Tailscale name. Click **Test connection**.
+The model pickers under **Settings → Models** then list whatever models
+the office server has installed. No models are downloaded on the
+laptop.
 
 ### Security
 
-On a Tailnet, peer identity is enforced by Tailscale ACLs. If you expose these services on an untrusted LAN, configure `whisper.cpp server --api-key` and enter the same value in FerriScribe's **API key** field; Ollama does not currently support API keys natively and should stay behind a trusted network boundary.
+Per-client tokens are issued during pairing and stored in the laptop's
+OS keychain. Revoke a lost / stolen laptop's access from the office
+server's **Connected clients** panel.
 
-### What stays local on Computer B
+Pairing traffic is plain HTTP. On a clinic LAN with guest Wi-Fi or BYOD
+risk, prefer Tailscale (which transparently encrypts with WireGuard).
+
+### What stays local on each laptop
 
 - Audio capture and waveform display
 - Speaker diarization (pyannote + WeSpeaker)
 - SQLite database, vocabulary rules, RAG vector store
 - The SOAP / referral / letter / synopsis editors
 
-Only the Whisper inference and Ollama chat / embedding calls cross the wire.
+Only Whisper inference and Ollama chat / embedding calls cross the wire.
 
 ## Where Your Data Lives
 
