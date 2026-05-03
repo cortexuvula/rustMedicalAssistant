@@ -137,8 +137,11 @@ impl SharingService {
             self.store.clone(),
         ).await?;
 
+        // Push h1 immediately so that if anything below fails, stop() can abort it.
+        self.handles.lock().await.push(h1);
+
         // Whisper auth proxy — bind first.
-        let h2 = spawn_auth_proxy(
+        let h2 = match spawn_auth_proxy(
             ProxyConfig {
                 listen_port: self.config.whisper_proxy_port,
                 backend_url: format!("http://127.0.0.1:{}", self.config.whisper_internal_port),
@@ -146,16 +149,26 @@ impl SharingService {
                 inject_api_key: Some(self.config.whisper_internal_api_key.clone()),
             },
             self.store.clone(),
-        ).await?;
+        ).await {
+            Ok(h) => h,
+            Err(e) => {
+                // h1 is already in handles; drain and abort it.
+                for h in self.handles.lock().await.drain(..) { h.abort(); }
+                return Err(e);
+            }
+        };
 
-        // Whisper child
-        self.whisper
-            .start()
-            .await
-            .map_err(|e| SharingError::WhisperSupervisor(e.to_string()))?;
+        // Push h2 immediately so that if anything below fails, stop() can abort it.
+        self.handles.lock().await.push(h2);
 
-        // mDNS
-        let mdns = MdnsAdvertiser::start(
+        // Whisper child — if this fails, roll back the two proxy tasks above.
+        if let Err(e) = self.whisper.start().await {
+            for h in self.handles.lock().await.drain(..) { h.abort(); }
+            return Err(SharingError::WhisperSupervisor(e.to_string()));
+        }
+
+        // mDNS — roll back on failure.
+        let mdns = match MdnsAdvertiser::start(
             &self.config.friendly_name,
             &ServerPorts {
                 ollama: Some(self.config.ollama_proxy_port),
@@ -164,20 +177,32 @@ impl SharingService {
                 pairing: Some(self.config.pairing_port),
             },
             &self.config.version,
-        )?;
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                self.whisper.stop().await;
+                for h in self.handles.lock().await.drain(..) { h.abort(); }
+                return Err(e);
+            }
+        };
         *self.mdns.lock().await = Some(mdns);
 
         // Pairing HTTP service — bind first so port conflicts surface as errors.
-        let h3 = spawn_pairing_service(
+        let h3 = match spawn_pairing_service(
             self.config.pairing_port,
             self.pairing.clone(),
             self.store.clone(),
-        ).await?;
+        ).await {
+            Ok(h) => h,
+            Err(e) => {
+                if let Some(m) = self.mdns.lock().await.take() { m.stop(); }
+                self.whisper.stop().await;
+                for h in self.handles.lock().await.drain(..) { h.abort(); }
+                return Err(e);
+            }
+        };
 
-        let mut handles = self.handles.lock().await;
-        handles.push(h1);
-        handles.push(h2);
-        handles.push(h3);
+        self.handles.lock().await.push(h3);
         *running = true;
         Ok(())
     }

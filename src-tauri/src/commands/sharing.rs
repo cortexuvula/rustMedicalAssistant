@@ -215,8 +215,13 @@ pub async fn discover_servers(timeout_ms: u64) -> Result<Vec<DiscoveredServer>, 
 /// persist the token in the OS keychain, and persist the non-secret endpoint
 /// metadata to disk. Returns nothing to the frontend — no raw token is ever
 /// sent to JS.
+///
+/// After persisting, the in-memory Ollama, LM Studio, and remote-STT providers
+/// are updated immediately so the "models visible" success message in the UI is
+/// truthful without requiring an app restart.
 #[tauri::command]
 pub async fn pair_with_server(
+    state: State<'_, AppState>,
     lan: Option<String>,
     tailscale: Option<String>,
     ports: PairPorts,
@@ -259,10 +264,44 @@ pub async fn pair_with_server(
         .map_err(|e| format!("keychain write: {e}"))?;
 
     // Persist non-secret endpoint metadata.
-    let conn = PairedConnection { lan, tailscale, ports, label };
+    let conn = PairedConnection { lan: lan.clone(), tailscale: tailscale.clone(), ports: ports.clone(), label };
     let json = serde_json::to_string(&conn).map_err(|e| e.to_string())?;
     let path = paired_connection_path()?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
+
+    // Update in-memory provider endpoints immediately so the "models visible"
+    // success message in ClientPair.svelte is truthful without an app restart.
+    use medical_core::types::RemoteEndpoint;
+    let bearer = Some(token);
+
+    let ollama_ep = Some(RemoteEndpoint {
+        lan: lan.clone(),
+        tailscale: tailscale.clone(),
+        port: ports.ollama,
+        bearer: bearer.clone(),
+    });
+    let lmstudio_ep = ports.lmstudio.map(|lp| RemoteEndpoint {
+        lan: lan.clone(),
+        tailscale: tailscale.clone(),
+        port: lp,
+        bearer: bearer.clone(),
+    });
+    let whisper_ep = Some(RemoteEndpoint {
+        lan: lan.clone(),
+        tailscale: tailscale.clone(),
+        port: ports.whisper,
+        bearer: bearer.clone(),
+    });
+
+    if let Some(ref p) = state.ollama_provider {
+        p.set_endpoint(ollama_ep).await;
+    }
+    if let Some(ref p) = state.lmstudio_provider {
+        p.set_endpoint(lmstudio_ep).await;
+    }
+    if let Some(ref p) = state.remote_stt_provider {
+        p.set_endpoint(whisper_ep).await;
+    }
 
     Ok(())
 }

@@ -85,10 +85,32 @@ pub async fn download_model(
         cfg.migrate();
         cfg
     };
-    let stt_handles = crate::state::init_stt_providers_with_config(&state.data_dir, &config, None);
+    // Re-load the paired RemoteEndpoint (if any) so the reinitialised STT
+    // provider routes to the office server rather than silently falling back
+    // to localhost.
+    let paired = crate::state::load_paired_connection();
+    let bearer = if paired.is_some() { crate::state::load_sharing_bearer() } else { None };
+    let whisper_ep = if let Some(ref p) = paired {
+        use medical_core::types::RemoteEndpoint;
+        Some(RemoteEndpoint {
+            lan: p.lan.clone(),
+            tailscale: p.tailscale.clone(),
+            port: p.ports.whisper,
+            bearer: bearer.clone(),
+        })
+    } else {
+        None
+    };
+
+    let stt_handles =
+        crate::state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep.clone());
     {
         let mut guard = state.stt_providers.lock().await;
         *guard = stt_handles.provider;
+    }
+    // Keep the typed remote handle in AppState in sync with the updated endpoint.
+    if let Some(ref remote_arc) = state.remote_stt_provider {
+        remote_arc.set_endpoint(whisper_ep).await;
     }
 
     Ok(())
