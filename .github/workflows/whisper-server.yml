@@ -9,10 +9,10 @@ on:
       whisper_tag:
         description: 'whisper.cpp upstream tag to build'
         required: true
-        default: 'v1.7.6'
+        default: 'v1.8.4'
 
 env:
-  WHISPER_TAG: ${{ github.event.inputs.whisper_tag || 'v1.7.6' }}
+  WHISPER_TAG: ${{ github.event.inputs.whisper_tag || 'v1.8.4' }}
 
 permissions:
   contents: write
