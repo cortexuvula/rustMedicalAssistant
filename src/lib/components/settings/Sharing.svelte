@@ -38,10 +38,25 @@
   </p>
 
   <div class="modes">
-    <label><input type="radio" bind:group={mode} value="off" /> Off</label>
-    <label><input type="radio" bind:group={mode} value="server" /> This machine is the office server</label>
-    <label><input type="radio" bind:group={mode} value="client" /> This machine connects to an office server</label>
+    <label class:disabled={sharingOn}>
+      <input type="radio" bind:group={mode} value="off" disabled={sharingOn} />
+      Off
+    </label>
+    <label>
+      <input type="radio" bind:group={mode} value="server" />
+      This machine is the office server
+    </label>
+    <label class:disabled={sharingOn}>
+      <input type="radio" bind:group={mode} value="client" disabled={sharingOn} />
+      This machine connects to an office server
+    </label>
   </div>
+
+  {#if sharingOn}
+    <p class="hint">
+      Stop sharing first (in the panel below) before switching modes.
+    </p>
+  {/if}
 
   {#if mode === 'server' && !sharingOn}
     <ServerWizard on:done={refresh} />
@@ -56,4 +71,5 @@
   .sharing { display: flex; flex-direction: column; gap: 1rem; }
   .modes { display: flex; gap: 1rem; }
   .hint { color: var(--text-muted, #888); }
+  label.disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
