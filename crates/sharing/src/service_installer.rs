@@ -1,0 +1,247 @@
+//! Service installer — per-platform persistent Ollama service writers (launchd / systemd / scheduled task).
+//!
+//! Writes a service unit that runs `ollama serve` with
+//! OLLAMA_HOST=127.0.0.1:11434 so Ollama remains loopback-only. The auth
+//! proxy is what's exposed on the network.
+
+use std::path::PathBuf;
+
+use crate::SharingError;
+
+/// Find the absolute path to the `ollama` binary. Tries `which ollama`
+/// first (or `where.exe ollama` on Windows), then falls back to a list of
+/// known install locations per platform. Returns `None` if not found.
+fn find_ollama_binary() -> Option<PathBuf> {
+    // 1. Try `which` / `where.exe`.
+    #[cfg(unix)]
+    let probe = std::process::Command::new("which").arg("ollama").output().ok();
+    #[cfg(windows)]
+    let probe = std::process::Command::new("where.exe").arg("ollama").output().ok();
+
+    if let Some(out) = probe {
+        if out.status.success() {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            // `where.exe` may return multiple lines; take the first.
+            let first = s.lines().next().unwrap_or("").to_string();
+            if !first.is_empty() {
+                let p = PathBuf::from(first);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // 2. Per-platform known locations.
+    #[cfg(target_os = "macos")]
+    let candidates: &[&str] = &[
+        "/opt/homebrew/bin/ollama",   // Apple Silicon Homebrew
+        "/usr/local/bin/ollama",      // Intel Homebrew / official installer
+        "/usr/bin/ollama",
+    ];
+    #[cfg(target_os = "linux")]
+    let candidates: &[&str] = &[
+        "/usr/local/bin/ollama",
+        "/usr/bin/ollama",
+        "/snap/bin/ollama",
+    ];
+    #[cfg(target_os = "windows")]
+    let candidates: &[&str] = &[
+        r"C:\Program Files\Ollama\ollama.exe",
+    ];
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let candidates: &[&str] = &[];
+
+    for c in candidates {
+        let p = PathBuf::from(c);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Escape characters that are special in XML attribute values and text content.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceState {
+    Installed,
+    Missing,
+    UnknownPlatform,
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+
+    fn plist_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library/LaunchAgents/com.ferriscribe.ollama.plist")
+    }
+
+    pub fn install() -> Result<(), SharingError> {
+        let path = plist_path();
+        let bin = super::find_ollama_binary().ok_or_else(|| {
+            SharingError::ServiceInstaller(
+                "Ollama binary not found. Install Ollama first (https://ollama.com/download)."
+                    .to_string(),
+            )
+        })?;
+        let bin_str = super::xml_escape(&bin.to_string_lossy());
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ferriscribe.ollama</string>
+  <key>ProgramArguments</key>
+  <array><string>{bin_str}</string><string>serve</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>OLLAMA_HOST</key><string>127.0.0.1:11434</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+"#
+        );
+        std::fs::create_dir_all(path.parent().unwrap())
+            .map_err(SharingError::Io)?;
+        std::fs::write(&path, plist).map_err(SharingError::Io)?;
+        let status = std::process::Command::new("launchctl")
+            .args(["load", "-w"])
+            .arg(&path)
+            .status()
+            .map_err(SharingError::Io)?;
+        if !status.success() {
+            return Err(SharingError::ServiceInstaller(format!(
+                "launchctl load exited with {}", status
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn state() -> ServiceState {
+        if plist_path().exists() {
+            ServiceState::Installed
+        } else {
+            ServiceState::Missing
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
+
+    fn unit_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("systemd/user/ferriscribe-ollama.service")
+    }
+
+    pub fn install() -> Result<(), SharingError> {
+        let path = unit_path();
+        let bin = super::find_ollama_binary().ok_or_else(|| {
+            SharingError::ServiceInstaller(
+                "Ollama binary not found. Install Ollama first (https://ollama.com/download)."
+                    .to_string(),
+            )
+        })?;
+        let bin_str = bin.to_string_lossy();
+        let unit = format!(
+            "[Unit]\nDescription=Ollama (managed by FerriScribe)\n\n[Service]\nEnvironment=OLLAMA_HOST=127.0.0.1:11434\nExecStart={bin_str} serve\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+        );
+        std::fs::create_dir_all(path.parent().unwrap())
+            .map_err(SharingError::Io)?;
+        std::fs::write(&path, unit).map_err(SharingError::Io)?;
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "enable", "--now", "ferriscribe-ollama.service"])
+            .status();
+        Ok(())
+    }
+
+    pub fn state() -> ServiceState {
+        if unit_path().exists() {
+            ServiceState::Installed
+        } else {
+            ServiceState::Missing
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows {
+    use super::*;
+
+    pub fn install() -> Result<(), SharingError> {
+        let bin = super::find_ollama_binary().ok_or_else(|| {
+            SharingError::ServiceInstaller(
+                "Ollama binary not found. Install Ollama first (https://ollama.com/download)."
+                    .to_string(),
+            )
+        })?;
+        let bin_str = super::xml_escape(&bin.to_string_lossy());
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c set OLLAMA_HOST=127.0.0.1:11434 &amp; {bin_str} serve</Arguments>
+    </Exec>
+  </Actions>
+</Task>"#
+        );
+        let dir = std::env::temp_dir();
+        let xml_path = dir.join("ferriscribe-ollama.xml");
+        std::fs::write(&xml_path, xml).map_err(SharingError::Io)?;
+        let status = std::process::Command::new("schtasks")
+            .args(["/Create", "/TN", "FerriScribe Ollama", "/XML"])
+            .arg(&xml_path)
+            .args(["/F"])
+            .status()
+            .map_err(SharingError::Io)?;
+        if !status.success() {
+            return Err(SharingError::ServiceInstaller(format!(
+                "schtasks /Create exited with {}", status
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn state() -> ServiceState {
+        let out = std::process::Command::new("schtasks")
+            .args(["/Query", "/TN", "FerriScribe Ollama"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => ServiceState::Installed,
+            Ok(_) => ServiceState::Missing,
+            Err(_) => ServiceState::UnknownPlatform,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use macos::{install as install_persistent_ollama, state as ollama_service_state};
+#[cfg(target_os = "linux")]
+pub use linux::{install as install_persistent_ollama, state as ollama_service_state};
+#[cfg(target_os = "windows")]
+pub use windows::{install as install_persistent_ollama, state as ollama_service_state};
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub fn install_persistent_ollama() -> Result<(), SharingError> {
+    Err(SharingError::ServiceInstaller("unsupported platform".into()))
+}
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub fn ollama_service_state() -> ServiceState { ServiceState::UnknownPlatform }

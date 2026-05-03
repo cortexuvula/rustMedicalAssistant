@@ -162,6 +162,8 @@ pub struct OpenAiCompatibleClient {
     pub client: Client,
     pub base_url: String,
     pub policy: RetryConfig,
+    /// Optional bearer token sent as `Authorization: Bearer <token>`.
+    pub bearer: Option<String>,
 }
 
 impl OpenAiCompatibleClient {
@@ -174,6 +176,22 @@ impl OpenAiCompatibleClient {
             client,
             base_url: base_url.into(),
             policy,
+            bearer: None,
+        }
+    }
+
+    /// Create a client with an optional bearer token.
+    pub fn new_with_bearer(
+        client: Client,
+        base_url: impl Into<String>,
+        policy: RetryConfig,
+        bearer: Option<String>,
+    ) -> Self {
+        Self {
+            client,
+            base_url: base_url.into(),
+            policy,
+            bearer,
         }
     }
 
@@ -329,11 +347,29 @@ impl OpenAiCompatibleClient {
         }
     }
 
+    /// Build an authorized `RequestBuilder` for a GET request.
+    fn get(&self, url: &str) -> reqwest::RequestBuilder {
+        let mut req = self.client.get(url);
+        if let Some(b) = &self.bearer {
+            req = req.bearer_auth(b);
+        }
+        req
+    }
+
+    /// Build an authorized `RequestBuilder` for a POST request with a JSON body.
+    fn post_json<T: serde::Serialize>(&self, url: &str, body: &T) -> reqwest::RequestBuilder {
+        let mut req = self.client.post(url).json(body);
+        if let Some(b) = &self.bearer {
+            req = req.bearer_auth(b);
+        }
+        req
+    }
+
     /// Fetch the list of model IDs from the `/models` endpoint.
     pub async fn list_models(&self) -> AppResult<Vec<String>> {
         let url = format!("{}/models", self.base_url);
         let response = crate::http_client::send_with_retry(&self.policy, || {
-            self.client.get(&url)
+            self.get(&url)
         })
         .await
         .map_err(|e| AppError::AiProvider(e.to_string()))?;
@@ -359,7 +395,7 @@ impl OpenAiCompatibleClient {
         let body = self.build_request(request);
 
         let response = crate::http_client::send_with_retry(&self.policy, || {
-            self.client.post(&url).json(&body)
+            self.post_json(&url, &body)
         })
         .await
         .map_err(|e| AppError::AiProvider(e.to_string()))?;
@@ -415,7 +451,7 @@ impl OpenAiCompatibleClient {
         body.stream_options = Some(StreamOptions { include_usage: true });
 
         let response = crate::http_client::send_with_retry(&self.policy, || {
-            self.client.post(&url).json(&body)
+            self.post_json(&url, &body)
         })
         .await
         .map_err(|e| AppError::AiProvider(e.to_string()))?;
@@ -510,7 +546,7 @@ impl OpenAiCompatibleClient {
         );
 
         let response = crate::http_client::send_with_retry(&self.policy, || {
-            self.client.post(&url).json(&body)
+            self.post_json(&url, &body)
         })
         .await
         .map_err(|e| AppError::AiProvider(e.to_string()))?;

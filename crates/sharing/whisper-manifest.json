@@ -1,0 +1,34 @@
+{
+  "_note": "whisper.cpp v1.7.6 ships prebuilt server binaries only for Windows (inside whisper-bin-x64.zip). macOS and Linux office-server admins must build whisper-server from source: https://github.com/ggml-org/whisper.cpp#server. The supervisor surfaces UnsupportedPlatform for those platforms until prebuilt binaries become available.",
+  "version": "v1.7.6",
+  "binaries": {
+    "macos-aarch64": {
+      "_note": "whisper.cpp does not ship a prebuilt whisper-server binary for macOS. Build from source: https://github.com/ggml-org/whisper.cpp#server",
+      "url": null,
+      "sha256": null,
+      "archive": null,
+      "binary_name": "whisper-server"
+    },
+    "macos-x86_64": {
+      "_note": "whisper.cpp does not ship a prebuilt whisper-server binary for macOS. Build from source: https://github.com/ggml-org/whisper.cpp#server",
+      "url": null,
+      "sha256": null,
+      "archive": null,
+      "binary_name": "whisper-server"
+    },
+    "linux-x86_64": {
+      "_note": "whisper.cpp does not ship a prebuilt whisper-server binary for Linux. Build from source: https://github.com/ggml-org/whisper.cpp#server",
+      "url": null,
+      "sha256": null,
+      "archive": null,
+      "binary_name": "whisper-server"
+    },
+    "windows-x86_64": {
+      "_note": "whisper-server.exe is bundled inside whisper-bin-x64.zip. The repo moved from ggerganov/ to ggml-org/ between v1.7.5 and v1.7.6; use the ggml-org URL. zip SHA256 verified 2026-05-02.",
+      "url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.6/whisper-bin-x64.zip",
+      "sha256": "0d2eca299c248f965bd0341bcb219db4b433c7f0c0ce2200d4df85765e8156a9",
+      "archive": "zip",
+      "binary_name": "whisper-server.exe"
+    }
+  }
+}

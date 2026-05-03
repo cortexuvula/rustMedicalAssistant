@@ -3,8 +3,9 @@
   import Prompts from './settings/Prompts.svelte';
   import Models from './settings/Models.svelte';
   import Audio from './settings/Audio.svelte';
+  import Sharing from './settings/Sharing.svelte';
 
-  type Section = 'general' | 'prompts' | 'models' | 'audio';
+  type Section = 'general' | 'prompts' | 'models' | 'audio' | 'sharing';
   let activeSection = $state<Section>('general');
 
   const navItems: { id: Section; label: string }[] = [
@@ -12,6 +13,7 @@
     { id: 'prompts', label: 'Prompts' },
     { id: 'models', label: 'AI Models' },
     { id: 'audio', label: 'Audio / STT' },
+    { id: 'sharing', label: 'Sharing' },
   ];
 </script>
 
@@ -40,6 +42,9 @@
 
     {:else if activeSection === 'audio'}
       <Audio />
+
+    {:else if activeSection === 'sharing'}
+      <Sharing />
     {/if}
   </div>
 </div>

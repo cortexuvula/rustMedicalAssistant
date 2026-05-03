@@ -6,6 +6,7 @@ members = [
     "crates/security",
     "crates/audio",
     "crates/ai-providers",
+    "crates/sharing",
     "crates/stt-providers",
     "crates/tts-providers",
     "crates/agents",

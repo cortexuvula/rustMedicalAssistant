@@ -15,13 +15,15 @@ use reqwest::{
     multipart::{Form, Part},
 };
 use serde::Deserialize;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use medical_core::error::{AppError, AppResult};
 use medical_core::traits::SttProvider;
 use medical_core::types::{
-    AudioData, AudioStream, SttConfig, Transcript, TranscriptChunk, TranscriptSegment,
+    AudioData, AudioStream, RemoteEndpoint, SttConfig, Transcript, TranscriptChunk,
+    TranscriptSegment,
 };
 
 use crate::audio_prep;
@@ -32,13 +34,35 @@ use crate::whisper::WhisperSegment;
 const TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(600);
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 30-second resolved-URL cache for RemoteEndpoint resolution
+// ──────────────────────────────────────────────────────────────────────────────
+
+struct ResolvedCache {
+    url: String,
+    resolved_at: std::time::Instant,
+}
+
+const CACHE_TTL: Duration = Duration::from_secs(30);
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 pub struct RemoteSttProvider {
     client: Client,
+    /// Fallback static base URL used when no `endpoint` is configured.
     base_url: String,
     model: String,
+    /// Bearer token sent as `Authorization: Bearer <token>`. Semantically
+    /// this is a bearer credential (for the auth proxy in paired mode), not
+    /// a whisper.cpp `--api-key`. The field name `api_key` is preserved to
+    /// avoid churn at existing call sites.
     api_key: Option<String>,
     segmentation_model_path: PathBuf,
     embedding_model_path: PathBuf,
+    /// Optional LAN/Tailscale endpoint. When set, `current_base_url()` resolves
+    /// the first reachable address with a 30-second cache.
+    endpoint: RwLock<Option<RemoteEndpoint>>,
+    url_cache: Mutex<Option<ResolvedCache>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,7 +112,78 @@ impl RemoteSttProvider {
             api_key,
             segmentation_model_path,
             embedding_model_path,
+            endpoint: RwLock::new(None),
+            url_cache: Mutex::new(None),
         })
+    }
+
+    /// Create a new RemoteSttProvider with a `RemoteEndpoint` pre-configured.
+    ///
+    /// Usable in synchronous initialization code (no running async runtime required).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_endpoint(
+        host: &str,
+        port: u16,
+        model: &str,
+        api_key: Option<String>,
+        segmentation_model_path: PathBuf,
+        embedding_model_path: PathBuf,
+        ep: Option<RemoteEndpoint>,
+    ) -> AppResult<Self> {
+        let host = if host.is_empty() { "localhost" } else { host };
+        let base_url = format!("http://{host}:{port}");
+        let client = Client::builder()
+            .pool_max_idle_per_host(4)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(TRANSCRIBE_TIMEOUT)
+            .build()
+            .map_err(|e| AppError::SttProvider(format!("Failed to build HTTP client: {e}")))?;
+        Ok(Self {
+            client,
+            base_url,
+            model: model.to_string(),
+            api_key,
+            segmentation_model_path,
+            embedding_model_path,
+            endpoint: RwLock::new(ep),
+            url_cache: Mutex::new(None),
+        })
+    }
+
+    /// Override the remote endpoint used for LAN/Tailscale resolution.
+    /// Invalidates the URL cache so the next call re-resolves.
+    pub async fn set_endpoint(&self, ep: Option<RemoteEndpoint>) {
+        *self.url_cache.lock().await = None;
+        *self.endpoint.write().await = ep;
+    }
+
+    /// Resolve the current base URL (no trailing path).
+    /// If a RemoteEndpoint is configured, probe LAN then Tailscale with a 30s
+    /// cache.  Falls back to `self.base_url` when no endpoint is set.
+    async fn current_base_url(&self) -> AppResult<String> {
+        let ep_guard = self.endpoint.read().await;
+        if let Some(ep) = ep_guard.as_ref() {
+            let mut cache = self.url_cache.lock().await;
+            if let Some(c) = cache.as_ref() {
+                if c.resolved_at.elapsed() < CACHE_TTL {
+                    return Ok(c.url.clone());
+                }
+            }
+            let url = ep
+                .resolve_base_url()
+                .await
+                .ok_or_else(|| {
+                    AppError::SttProvider(
+                        "Office server unreachable on LAN or Tailscale.".to_string(),
+                    )
+                })?;
+            *cache = Some(ResolvedCache {
+                url: url.clone(),
+                resolved_at: std::time::Instant::now(),
+            });
+            return Ok(url);
+        }
+        Ok(self.base_url.clone())
     }
 
     fn diarization_available(&self) -> bool {
@@ -101,7 +196,8 @@ impl RemoteSttProvider {
         language: Option<&str>,
         cancel: &CancellationToken,
     ) -> AppResult<VerboseJson> {
-        let url = format!("{}/v1/audio/transcriptions", self.base_url);
+        let base = self.current_base_url().await?;
+        let url = format!("{base}/v1/audio/transcriptions");
 
         let mut form = Form::new()
             .part(
@@ -140,8 +236,7 @@ impl RemoteSttProvider {
                         ))
                     } else if e.is_connect() {
                         AppError::SttProvider(format!(
-                            "Cannot reach Whisper server at {}: {e}",
-                            self.base_url
+                            "Cannot reach Whisper server at {base}: {e}"
                         ))
                     } else {
                         AppError::SttProvider(format!("Whisper request failed: {e}"))
@@ -202,6 +297,9 @@ impl SttProvider for RemoteSttProvider {
         cancel: CancellationToken,
     ) -> AppResult<Transcript> {
         let duration = audio.duration_seconds();
+
+        // Resolve the server URL once for this transcription (cached 30s).
+        let resolved_server = self.current_base_url().await?;
 
         // Stage 1: resample to 16 kHz mono f32, then convert to i16 for upload.
         let audio_16k = audio_prep::to_16k_mono_f32(&audio);
@@ -290,7 +388,7 @@ impl SttProvider for RemoteSttProvider {
             duration_seconds: Some(duration),
             provider: "remote".to_owned(),
             metadata: serde_json::json!({
-                "server": self.base_url,
+                "server": resolved_server,
                 "model": self.model,
             }),
         })
@@ -568,5 +666,80 @@ mod tests {
             .expect("transcribe");
         assert_eq!(transcript.segments.len(), 1, "empty/missing text segments must be filtered");
         assert_eq!(transcript.segments[0].text, "Hello.");
+    }
+
+    #[tokio::test]
+    async fn set_endpoint_clears_url_cache() {
+        let p = RemoteSttProvider::new(
+            "localhost",
+            8080,
+            "whisper-1",
+            None,
+            PathBuf::from("/no/seg.onnx"),
+            PathBuf::from("/no/emb.onnx"),
+        )
+        .expect("build");
+
+        // Seed the cache manually.
+        *p.url_cache.lock().await = Some(ResolvedCache {
+            url: "http://stale:9999".to_string(),
+            resolved_at: std::time::Instant::now(),
+        });
+
+        p.set_endpoint(None).await;
+        assert!(p.url_cache.lock().await.is_none(), "cache must be cleared on set_endpoint");
+    }
+
+    #[tokio::test]
+    async fn current_base_url_returns_static_when_no_endpoint() {
+        let p = RemoteSttProvider::new(
+            "myhost",
+            8080,
+            "whisper-1",
+            None,
+            PathBuf::from("/no/seg.onnx"),
+            PathBuf::from("/no/emb.onnx"),
+        )
+        .expect("build");
+
+        let url = p.current_base_url().await.expect("url");
+        assert_eq!(url, "http://myhost:8080");
+    }
+
+    #[tokio::test]
+    async fn current_base_url_caches_for_30s() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let p = RemoteSttProvider::new(
+            "localhost",
+            9999,
+            "whisper-1",
+            None,
+            PathBuf::from("/no/seg.onnx"),
+            PathBuf::from("/no/emb.onnx"),
+        )
+        .expect("build");
+
+        p.set_endpoint(Some(RemoteEndpoint {
+            lan: Some("127.0.0.1".to_string()),
+            tailscale: None,
+            port,
+            bearer: None,
+        }))
+        .await;
+
+        // First call: port is open — should resolve.
+        let url1 = p.current_base_url().await.expect("first resolve");
+        assert!(url1.contains(&port.to_string()));
+
+        // Drop listener so port is closed.
+        drop(listener);
+
+        // Second call immediately: cache should return the same URL.
+        let url2 = p.current_base_url().await.expect("cached resolve");
+        assert_eq!(url1, url2, "should return cached URL without re-probing");
     }
 }

@@ -3,30 +3,52 @@
 use async_trait::async_trait;
 use futures_core::Stream;
 use reqwest::Client;
+use tokio::sync::{Mutex, RwLock};
 
 use medical_core::{
     error::{AppError, AppResult},
     traits::AiProvider,
-    types::{CompletionRequest, CompletionResponse, ModelInfo, StreamChunk, ToolCompletionResponse, ToolDef},
+    types::{
+        CompletionRequest, CompletionResponse, ModelInfo, RemoteEndpoint, StreamChunk,
+        ToolCompletionResponse, ToolDef,
+    },
 };
 
 use crate::http_client::RetryConfig;
 use crate::openai_compat::OpenAiCompatibleClient;
 
+// ──────────────────────────────────────────────────────────────────────────────
+// 30-second resolved-URL cache for RemoteEndpoint resolution
+// ──────────────────────────────────────────────────────────────────────────────
+
+struct ResolvedCache {
+    url: String,
+    resolved_at: std::time::Instant,
+}
+
+const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 pub struct OllamaProvider {
-    client: OpenAiCompatibleClient,
+    /// Static base_url used when no RemoteEndpoint is configured.
+    static_base_url: String,
+    client: Mutex<OpenAiCompatibleClient>,
+    /// Optional LAN/Tailscale endpoint; takes precedence over `static_base_url`.
+    endpoint: RwLock<Option<RemoteEndpoint>>,
+    url_cache: Mutex<Option<ResolvedCache>>,
 }
 
 impl OllamaProvider {
     /// Create a new Ollama provider.
     ///
     /// `host` defaults to `http://localhost:11434` when `None`.
+    /// `bearer` is an optional bearer token for auth-proxied remote connections.
     /// `policy` controls retry behavior for inner HTTP calls.
     /// Returns `Err(AppError::AiProvider)` if the reqwest client can't be built.
-    pub fn new(host: Option<&str>, policy: RetryConfig) -> AppResult<Self> {
+    pub fn new(host: Option<&str>, bearer: Option<String>, policy: RetryConfig) -> AppResult<Self> {
         let base = host.unwrap_or("http://localhost:11434");
         let base_url = format!("{base}/v1");
-        // No auth header for Ollama.
         let http = Client::builder()
             .pool_max_idle_per_host(5)
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -34,8 +56,85 @@ impl OllamaProvider {
             .build()
             .map_err(|e| AppError::AiProvider(format!("Failed to build Ollama HTTP client: {e}")))?;
         Ok(Self {
-            client: OpenAiCompatibleClient::new(http, base_url, policy),
+            static_base_url: base_url.clone(),
+            client: Mutex::new(OpenAiCompatibleClient::new_with_bearer(http, base_url, policy, bearer)),
+            endpoint: RwLock::new(None),
+            url_cache: Mutex::new(None),
         })
+    }
+
+    /// Create a new Ollama provider with a `RemoteEndpoint` pre-configured.
+    ///
+    /// Equivalent to `new(host, bearer, policy)` followed by `set_endpoint(ep)`,
+    /// but usable in synchronous initialization code (no running async runtime
+    /// required). Static `host` is kept as the fallback when `ep` is `None`.
+    pub fn new_with_endpoint(
+        host: Option<&str>,
+        bearer: Option<String>,
+        policy: RetryConfig,
+        ep: Option<RemoteEndpoint>,
+    ) -> AppResult<Self> {
+        let base = host.unwrap_or("http://localhost:11434");
+        let base_url = format!("{base}/v1");
+        let http = Client::builder()
+            .pool_max_idle_per_host(5)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| AppError::AiProvider(format!("Failed to build Ollama HTTP client: {e}")))?;
+        Ok(Self {
+            static_base_url: base_url.clone(),
+            client: Mutex::new(OpenAiCompatibleClient::new_with_bearer(http, base_url, policy, bearer)),
+            endpoint: RwLock::new(ep),
+            url_cache: Mutex::new(None),
+        })
+    }
+
+    /// Override the remote endpoint used for LAN/Tailscale resolution.
+    /// Invalidates the URL cache so the next call re-resolves.
+    pub async fn set_endpoint(&self, ep: Option<RemoteEndpoint>) {
+        *self.url_cache.lock().await = None;
+        *self.endpoint.write().await = ep;
+    }
+
+    /// Resolve the current base URL (without the `/v1` suffix applied here).
+    /// If a RemoteEndpoint is configured, probe LAN then Tailscale with a 30s
+    /// cache.  Falls back to the static URL when no endpoint is set.
+    async fn current_base_url(&self) -> AppResult<String> {
+        let ep_guard = self.endpoint.read().await;
+        if let Some(ep) = ep_guard.as_ref() {
+            let mut cache = self.url_cache.lock().await;
+            if let Some(c) = cache.as_ref() {
+                if c.resolved_at.elapsed() < CACHE_TTL {
+                    return Ok(c.url.clone());
+                }
+            }
+            let resolved = ep
+                .resolve_base_url()
+                .await
+                .ok_or_else(|| {
+                    AppError::AiProvider(
+                        "Office server unreachable on LAN or Tailscale (Ollama).".to_string(),
+                    )
+                })?;
+            let url = format!("{}/v1", resolved);
+            *cache = Some(ResolvedCache {
+                url: url.clone(),
+                resolved_at: std::time::Instant::now(),
+            });
+            return Ok(url);
+        }
+        // No endpoint — use static URL.
+        Ok(self.static_base_url.clone())
+    }
+
+    /// Ensure the inner client's base_url matches the current resolved URL.
+    /// Acquires the Mutex on `client`; callers must hold it for the full request.
+    async fn sync_client_url(&self) -> AppResult<tokio::sync::MutexGuard<'_, OpenAiCompatibleClient>> {
+        let url = self.current_base_url().await?;
+        let mut client = self.client.lock().await;
+        client.base_url = url;
+        Ok(client)
     }
 }
 
@@ -46,8 +145,9 @@ impl AiProvider for OllamaProvider {
     }
 
     async fn available_models(&self) -> AppResult<Vec<ModelInfo>> {
+        let client = self.sync_client_url().await?;
         // Ollama supports the OpenAI-compatible /v1/models endpoint
-        if let Ok(ids) = self.client.list_models().await {
+        if let Ok(ids) = client.list_models().await {
             let mut models: Vec<ModelInfo> = ids
                 .into_iter()
                 .map(|id| ModelInfo {
@@ -77,14 +177,16 @@ impl AiProvider for OllamaProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> AppResult<CompletionResponse> {
-        self.client.complete(&request).await
+        let client = self.sync_client_url().await?;
+        client.complete(&request).await
     }
 
     async fn complete_stream(
         &self,
         request: CompletionRequest,
     ) -> AppResult<Box<dyn Stream<Item = AppResult<StreamChunk>> + Send + Unpin>> {
-        let pinned = self.client.complete_stream(&request).await?;
+        let client = self.sync_client_url().await?;
+        let pinned = client.complete_stream(&request).await?;
         Ok(Box::new(pinned))
     }
 
@@ -93,7 +195,8 @@ impl AiProvider for OllamaProvider {
         request: CompletionRequest,
         tools: Vec<ToolDef>,
     ) -> AppResult<ToolCompletionResponse> {
-        self.client.complete_with_tools(&request, tools).await
+        let client = self.sync_client_url().await?;
+        client.complete_with_tools(&request, tools).await
     }
 }
 
@@ -103,17 +206,91 @@ mod tests {
 
     #[test]
     fn creates_with_default_host() {
-        let p = OllamaProvider::new(None, RetryConfig::default()).expect("build default provider");
-        assert_eq!(p.client.base_url, "http://localhost:11434/v1");
+        let p = OllamaProvider::new(None, None, RetryConfig::default()).expect("build default provider");
+        assert_eq!(p.static_base_url, "http://localhost:11434/v1");
     }
 
     #[test]
     fn creates_with_custom_host() {
         let p = OllamaProvider::new(
             Some("http://192.168.1.10:11434"),
+            None,
             RetryConfig::default(),
         )
         .expect("build custom provider");
-        assert_eq!(p.client.base_url, "http://192.168.1.10:11434/v1");
+        assert_eq!(p.static_base_url, "http://192.168.1.10:11434/v1");
+    }
+
+    #[test]
+    fn stores_bearer_token() {
+        use std::future::Future;
+        let p = OllamaProvider::new(
+            None,
+            Some("tok_test".into()),
+            RetryConfig::default(),
+        )
+        .expect("build provider with bearer");
+        // Bearer is on the inner client; block to read it.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let _ = p; // ensure p is used
+        });
+    }
+
+    #[tokio::test]
+    async fn set_endpoint_clears_cache() {
+        let p = OllamaProvider::new(None, None, RetryConfig::default()).expect("build");
+        // Seed the cache manually.
+        *p.url_cache.lock().await = Some(ResolvedCache {
+            url: "http://stale:9999/v1".to_string(),
+            resolved_at: std::time::Instant::now(),
+        });
+        // Setting a new endpoint must clear the cache.
+        p.set_endpoint(None).await;
+        assert!(p.url_cache.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn current_base_url_returns_static_when_no_endpoint() {
+        let p = OllamaProvider::new(
+            Some("http://192.168.1.42:11434"),
+            None,
+            RetryConfig::default(),
+        )
+        .expect("build");
+        let url = p.current_base_url().await.expect("url");
+        assert_eq!(url, "http://192.168.1.42:11434/v1");
+    }
+
+    #[tokio::test]
+    async fn current_base_url_caches_for_30s() {
+        use tokio::net::TcpListener;
+
+        // Bind a port so the resolver can connect.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let p = OllamaProvider::new(None, None, RetryConfig::default()).expect("build");
+        p.set_endpoint(Some(RemoteEndpoint {
+            lan: Some("127.0.0.1".to_string()),
+            tailscale: None,
+            port,
+            bearer: None,
+        }))
+        .await;
+
+        // First call: listener up — should resolve.
+        let url1 = p.current_base_url().await.expect("first resolve");
+        assert!(url1.contains(&port.to_string()));
+
+        // Drop the listener so the port is closed.
+        drop(listener);
+
+        // Second call immediately after: cache should still return the URL.
+        let url2 = p.current_base_url().await.expect("cached resolve");
+        assert_eq!(url1, url2, "cache should return same URL without re-probing");
     }
 }

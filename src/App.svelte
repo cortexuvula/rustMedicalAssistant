@@ -6,9 +6,11 @@
   import { generation } from './lib/stores/generation';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
 
   import Sidebar from './lib/components/Sidebar.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
+  import StatusBadge from './lib/components/StatusBadge.svelte';
   import SettingsDialog from './lib/dialogs/SettingsDialog.svelte';
   import DatabaseRecoveryDialog from './lib/dialogs/DatabaseRecoveryDialog.svelte';
   import { selectedRecording, selectRecording } from './lib/stores/recordings';
@@ -116,6 +118,20 @@
     };
     window.addEventListener('keydown', onGlobalKeydown);
 
+    // Register deep-link handler for ferriscribe:// URLs.
+    // Dispatches a custom event so the pairing screen (ClientPair.svelte)
+    // can handle it without coupling directly to this root component.
+    try {
+      onOpenUrl((urls) => {
+        const url = urls[0];
+        if (url?.startsWith('ferriscribe://pair?')) {
+          window.dispatchEvent(new CustomEvent('ferriscribe-pair-url', { detail: url }));
+        }
+      });
+    } catch {
+      // Plugin not available in dev/non-Tauri context; paste path still works.
+    }
+
     await pipeline.init();
 
     // Recover orphan recording state (e.g. after a webview reload left the
@@ -198,6 +214,7 @@
 
   <footer class="app-statusbar">
     <StatusBar />
+    <StatusBadge />
   </footer>
 
   <ToastContainer onNavigate={navigateToSoap} />

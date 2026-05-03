@@ -22,24 +22,38 @@ pub async fn reinit_providers(
         cfg
     };
 
+    // Re-load paired endpoint so reinit also re-wires endpoints.
+    let paired = state::load_paired_connection();
+    let bearer = if paired.is_some() { state::load_sharing_bearer() } else { None };
+    let (ollama_ep, lmstudio_ep, whisper_ep) = if let Some(ref p) = paired {
+        use medical_core::types::RemoteEndpoint;
+        (
+            Some(RemoteEndpoint { lan: p.lan.clone(), tailscale: p.tailscale.clone(), port: p.ports.ollama, bearer: bearer.clone() }),
+            p.ports.lmstudio.map(|lp| RemoteEndpoint { lan: p.lan.clone(), tailscale: p.tailscale.clone(), port: lp, bearer: bearer.clone() }),
+            Some(RemoteEndpoint { lan: p.lan.clone(), tailscale: p.tailscale.clone(), port: p.ports.whisper, bearer: bearer.clone() }),
+        )
+    } else {
+        (None, None, None)
+    };
+
     // Rebuild AI providers with current config (includes LM Studio host/port)
-    let mut ai_registry = state::init_ai_providers(&config);
+    let mut ai_handles = state::init_ai_providers(&config, ollama_ep, lmstudio_ep);
 
     // Restore the user's active provider preference from saved settings
     // so reinit doesn't silently switch to a random provider.
-    ai_registry.set_active(&config.ai_provider);
+    ai_handles.registry.set_active(&config.ai_provider);
 
-    let available = ai_registry.list_available();
+    let available = ai_handles.registry.list_available();
     {
         let mut guard = state.ai_providers.lock().await;
-        *guard = ai_registry;
+        *guard = ai_handles.registry;
     }
 
     // Rebuild STT provider based on current config (mode + whisper model + remote host/port/key).
-    let stt = state::init_stt_providers_with_config(&state.data_dir, &config);
+    let stt_handles = state::init_stt_providers_with_config(&state.data_dir, &config, whisper_ep);
     {
         let mut guard = state.stt_providers.lock().await;
-        *guard = stt;
+        *guard = stt_handles.provider;
     }
 
     info!(providers = ?available, "Providers reinitialized");

@@ -136,6 +136,7 @@ pub fn run() {
     builder = builder.manage(recovery_state);
 
     builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -210,6 +211,16 @@ pub fn run() {
             commands::recovery::recover_database_from_path,
             commands::recovery::recover_database_wipe,
             commands::recovery::database_encryption_status,
+            commands::sharing::start_sharing,
+            commands::sharing::stop_sharing,
+            commands::sharing::sharing_status,
+            commands::sharing::pairing_qr,
+            commands::sharing::list_paired_clients,
+            commands::sharing::revoke_client,
+            commands::sharing::discover_servers,
+            commands::sharing::pair_with_server,
+            commands::sharing::paired_endpoint,
+            commands::sharing::unpair,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

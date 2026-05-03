@@ -1,0 +1,299 @@
+//! Orchestrator — the public face of the sharing layer.
+//!
+//! Owns the auth proxy (Ollama route), auth proxy (whisper route), mDNS
+//! advertiser, pairing service, whisper-cpp supervisor. start() boots all
+//! enabled subsystems; stop() tears them down cleanly.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::Serialize;
+use tokio::sync::Mutex;
+
+use crate::SharingError;
+use crate::auth_proxy::{ProxyConfig, spawn_auth_proxy};
+use crate::mdns::{MdnsAdvertiser, ServerPorts};
+use crate::pairing::PairingState;
+use crate::token_store::TokenStore;
+use crate::whisper_supervisor::WhisperSupervisor;
+
+#[derive(Clone)]
+pub struct SharingConfig {
+    pub enabled: bool,
+    pub friendly_name: String,
+    pub ollama_proxy_port: u16,
+    pub whisper_proxy_port: u16,
+    pub pairing_port: u16,
+    pub whisper_internal_port: u16,
+    pub lmstudio_port: Option<u16>,
+    pub token_store_path: PathBuf,
+    pub token_store_key: [u8; 32],
+    pub binary_dir: PathBuf,
+    pub whisper_model_path: PathBuf,
+    pub whisper_internal_api_key: String,
+    pub version: String,
+}
+
+impl std::fmt::Debug for SharingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharingConfig")
+            .field("enabled", &self.enabled)
+            .field("friendly_name", &self.friendly_name)
+            .field("ollama_proxy_port", &self.ollama_proxy_port)
+            .field("whisper_proxy_port", &self.whisper_proxy_port)
+            .field("pairing_port", &self.pairing_port)
+            .field("whisper_internal_port", &self.whisper_internal_port)
+            .field("lmstudio_port", &self.lmstudio_port)
+            .field("token_store_path", &self.token_store_path)
+            .field("token_store_key", &"<redacted: 32 bytes>")
+            .field("binary_dir", &self.binary_dir)
+            .field("whisper_model_path", &self.whisper_model_path)
+            .field("whisper_internal_api_key", &"<redacted>")
+            .field("version", &self.version)
+            .finish()
+    }
+}
+
+impl Default for SharingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            friendly_name: "FerriScribe Server".to_string(),
+            ollama_proxy_port: 11435,
+            whisper_proxy_port: 8081,
+            pairing_port: 11436,
+            whisper_internal_port: 8080,
+            lmstudio_port: None,
+            token_store_path: PathBuf::new(),
+            token_store_key: [0u8; 32],
+            binary_dir: PathBuf::new(),
+            whisper_model_path: PathBuf::new(),
+            whisper_internal_api_key: String::new(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SharingStatus {
+    pub enabled: bool,
+    pub ollama_ok: bool,
+    pub whisper_ok: bool,
+    pub mdns_ok: bool,
+    pub pairing_ok: bool,
+    pub paired_clients: u32,
+}
+
+pub struct SharingService {
+    config: SharingConfig,
+    store: Arc<TokenStore>,
+    pairing: Arc<PairingState>,
+    whisper: Arc<WhisperSupervisor>,
+    mdns: Mutex<Option<MdnsAdvertiser>>,
+    handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    running: Mutex<bool>,
+}
+
+impl SharingService {
+    pub fn new(config: SharingConfig) -> Result<Self, SharingError> {
+        let store = Arc::new(
+            TokenStore::open(&config.token_store_path, &config.token_store_key)
+                .map_err(|e| SharingError::TokenStore(e.to_string()))?,
+        );
+        let pairing = Arc::new(PairingState::new(store.clone()));
+        let whisper = Arc::new(WhisperSupervisor::new(
+            config.binary_dir.clone(),
+            config.whisper_model_path.clone(),
+            config.whisper_internal_port,
+            config.whisper_internal_api_key.clone(),
+        ));
+        Ok(Self {
+            config,
+            store,
+            pairing,
+            whisper,
+            mdns: Mutex::new(None),
+            handles: Mutex::new(Vec::new()),
+            running: Mutex::new(false),
+        })
+    }
+
+    pub fn pairing_state(&self) -> Arc<PairingState> { self.pairing.clone() }
+    pub fn token_store(&self) -> Arc<TokenStore> { self.store.clone() }
+    pub fn config(&self) -> &SharingConfig { &self.config }
+
+    pub async fn start(&self) -> Result<(), SharingError> {
+        let mut running = self.running.lock().await;
+        if *running { return Ok(()); }
+
+        // Ollama auth proxy — bind first so port conflicts surface as errors.
+        let h1 = spawn_auth_proxy(
+            ProxyConfig {
+                listen_port: self.config.ollama_proxy_port,
+                backend_url: "http://127.0.0.1:11434".to_string(),
+                path_prefix: "/".to_string(),
+                inject_api_key: None,
+            },
+            self.store.clone(),
+        ).await?;
+
+        // Whisper auth proxy — bind first.
+        let h2 = spawn_auth_proxy(
+            ProxyConfig {
+                listen_port: self.config.whisper_proxy_port,
+                backend_url: format!("http://127.0.0.1:{}", self.config.whisper_internal_port),
+                path_prefix: "/".to_string(),
+                inject_api_key: Some(self.config.whisper_internal_api_key.clone()),
+            },
+            self.store.clone(),
+        ).await?;
+
+        // Whisper child
+        self.whisper
+            .start()
+            .await
+            .map_err(|e| SharingError::WhisperSupervisor(e.to_string()))?;
+
+        // mDNS
+        let mdns = MdnsAdvertiser::start(
+            &self.config.friendly_name,
+            &ServerPorts {
+                ollama: Some(self.config.ollama_proxy_port),
+                whisper: Some(self.config.whisper_proxy_port),
+                lmstudio: self.config.lmstudio_port,
+                pairing: Some(self.config.pairing_port),
+            },
+            &self.config.version,
+        )?;
+        *self.mdns.lock().await = Some(mdns);
+
+        // Pairing HTTP service — bind first so port conflicts surface as errors.
+        let h3 = spawn_pairing_service(
+            self.config.pairing_port,
+            self.pairing.clone(),
+            self.store.clone(),
+        ).await?;
+
+        let mut handles = self.handles.lock().await;
+        handles.push(h1);
+        handles.push(h2);
+        handles.push(h3);
+        *running = true;
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> Result<(), SharingError> {
+        let mut running = self.running.lock().await;
+        if !*running { return Ok(()); }
+        if let Some(m) = self.mdns.lock().await.take() {
+            m.stop();
+        }
+        self.whisper.stop().await;
+        for h in self.handles.lock().await.drain(..) {
+            h.abort();
+        }
+        *running = false;
+        Ok(())
+    }
+
+    pub async fn status(&self) -> SharingStatus {
+        let running = *self.running.lock().await;
+        let n = self
+            .store
+            .list()
+            .map(|v| v.len() as u32)
+            .unwrap_or(0);
+        SharingStatus {
+            enabled: running,
+            ollama_ok: running,
+            whisper_ok: running,
+            mdns_ok: running,
+            pairing_ok: running,
+            paired_clients: n,
+        }
+    }
+}
+
+async fn spawn_pairing_service(
+    port: u16,
+    pairing: Arc<PairingState>,
+    store: Arc<TokenStore>,
+) -> crate::Result<tokio::task::JoinHandle<()>> {
+    use std::net::SocketAddr;
+    use axum::{Json, Router, extract::{ConnectInfo, State}, routing::{get, post}};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone)]
+    struct St { pairing: Arc<PairingState>, store: Arc<TokenStore> }
+
+    #[derive(Deserialize)]
+    struct EnrollReq { code: String, label: String }
+    #[derive(Serialize)]
+    struct EnrollResp { token: String }
+
+    async fn enroll(
+        State(st): State<St>,
+        Json(req): Json<EnrollReq>,
+    ) -> Result<Json<EnrollResp>, axum::http::StatusCode> {
+        let token = st
+            .pairing
+            .enroll(&req.code, &req.label)
+            .await
+            .map_err(|_| axum::http::StatusCode::UNAUTHORIZED)?;
+        Ok(Json(EnrollResp { token }))
+    }
+
+    #[derive(Serialize)]
+    struct ClientView { id: i64, label: String }
+
+    /// Admin endpoint: list paired clients. Loopback-only.
+    async fn list_clients(
+        State(st): State<St>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ) -> Result<Json<Vec<ClientView>>, axum::http::StatusCode> {
+        if !addr.ip().is_loopback() {
+            return Err(axum::http::StatusCode::FORBIDDEN);
+        }
+        let v = st
+            .store
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| ClientView { id: r.id, label: r.label })
+            .collect();
+        Ok(Json(v))
+    }
+
+    /// Admin endpoint: revoke a client. Loopback-only.
+    async fn revoke(
+        State(st): State<St>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
+        axum::extract::Path(id): axum::extract::Path<i64>,
+    ) -> axum::http::StatusCode {
+        if !addr.ip().is_loopback() {
+            return axum::http::StatusCode::FORBIDDEN;
+        }
+        match st.store.revoke(id) {
+            Ok(_) => axum::http::StatusCode::NO_CONTENT,
+            Err(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    let st = St { pairing, store };
+    let app = Router::new()
+        .route("/pair/enroll", post(enroll))
+        .route("/pair/clients", get(list_clients))
+        .route("/pair/revoke/:id", post(revoke))
+        .with_state(st);
+
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
+        .await
+        .map_err(|e| crate::SharingError::Pairing(format!("bind 0.0.0.0:{port}: {e}")))?;
+
+    Ok(tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        ).await;
+    }))
+}

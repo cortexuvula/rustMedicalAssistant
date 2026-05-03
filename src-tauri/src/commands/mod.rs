@@ -11,6 +11,7 @@ pub mod rag;
 pub mod recordings;
 pub mod recovery;
 pub mod settings;
+pub mod sharing;
 pub mod transcription;
 pub mod vocabulary;
 

@@ -7,6 +7,7 @@ pub mod tts;
 pub mod rag;
 pub mod settings;
 pub mod vocabulary;
+pub mod endpoint;
 
 pub use recording::*;
 pub use processing::*;
@@ -17,3 +18,4 @@ pub use tts::*;
 pub use rag::*;
 pub use settings::*;
 pub use vocabulary::*;
+pub use endpoint::*;
