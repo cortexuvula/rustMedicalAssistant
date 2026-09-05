@@ -144,9 +144,9 @@ pub async fn capture_region_png(
     app: &tauri::AppHandle,
     data_dir: &Path,
 ) -> Result<Vec<u8>, RegionCaptureError> {
-    // Only the X11/Windows overlay arm uses the app handle; silence the
-    // unused binding on arms that don't.
-    let _ = app;
+    // data_dir is only used by the macOS arm (private capture dir), app only
+    // by the X11/Windows overlay arm — silence whichever is unused.
+    let _ = (app, data_dir);
     #[cfg(target_os = "macos")]
     {
         capture_macos(data_dir).await

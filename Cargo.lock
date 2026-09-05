@@ -2859,7 +2859,6 @@ dependencies = [
  "byteorder",
  "color_quant",
  "num-traits",
- "png 0.17.16",
 ]
 
 [[package]]
@@ -5646,7 +5645,7 @@ dependencies = [
 
 [[package]]
 name = "rust-medical-assistant"
-version = "0.75.1"
+version = "0.75.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5658,7 +5657,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hound",
- "image 0.24.9",
+ "image 0.25.10",
  "keyring",
  "medical-agents",
  "medical-ai-providers",
