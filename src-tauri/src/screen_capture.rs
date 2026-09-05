@@ -590,7 +590,7 @@ fn capture_screen_region_png(rect: CaptureRect) -> Result<Vec<u8>, RegionCapture
         ..rect
     };
     let local = clamp_rect(local, image.width() as i32, image.height() as i32)
-        .ok_or_else(|| RegionCaptureError::Cancelled)?;
+        .ok_or(RegionCaptureError::Cancelled)?;
 
     // Inherent `view`/`to_image` (not the GenericImageView-trait `crop_imm`)
     // so this compiles against both image 0.24 (xcap 0.4) and 0.25 types
