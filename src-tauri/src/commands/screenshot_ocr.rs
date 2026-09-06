@@ -32,6 +32,103 @@ pub const OCR_EVENT: &str = "screenshot-ocr";
 /// trigger while the picker is open is rejected instead of stacking overlays.
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
+/// Label of the always-on-top "recognizing text…" pill shown while the
+/// vision model runs. Frontend mounts `OcrProgressIndicator.svelte` for this
+/// hash route (see main.ts) — no invoke calls, so no capability entry.
+const PROGRESS_LABEL: &str = "ocr-progress";
+const PROGRESS_URL_FRAGMENT: &str = "ocr-progress";
+const PROGRESS_WIDTH: f64 = 220.0;
+const PROGRESS_HEIGHT: f64 = 44.0;
+
+/// Top-center position (logical px) of the progress pill on a monitor with
+/// the given physical origin/width and scale factor. Pure + unit-tested.
+fn indicator_position(mon_x: i32, mon_y: i32, mon_width: u32, scale: f64) -> (f64, f64) {
+    let scale = if scale < 0.01 { 0.01 } else { scale };
+    let phys_w = PROGRESS_WIDTH * scale;
+    let logical_x = (mon_x as f64 + (mon_width as f64 - phys_w) / 2.0) / scale;
+    let logical_y = mon_y as f64 / scale + 24.0;
+    (logical_x, logical_y)
+}
+
+/// RAII handle for the progress pill: created once the region capture is in
+/// hand, dropped on every exit path (copied / empty / error) so the pill can
+/// never outlive the OCR run. Window creation is best-effort — a failure to
+/// show it degrades to today's behavior (completion toasts only), never to a
+/// capture failure. Tauri window builders are thread-safe: creation from the
+/// async worker is dispatched to the main-thread event loop internally.
+struct ProgressIndicator {
+    app: tauri::AppHandle,
+    shown: bool,
+}
+
+impl ProgressIndicator {
+    fn show(app: &tauri::AppHandle) -> Self {
+        let mut indicator = Self {
+            app: app.clone(),
+            shown: false,
+        };
+        if let Err(e) = indicator.build_window() {
+            tracing::debug!(error = %e, "OCR progress pill unavailable");
+        }
+        indicator
+    }
+
+    fn build_window(&mut self) -> Result<(), String> {
+        use tauri::Manager;
+        // A stale pill from a previous abnormal exit would make the build
+        // fail on the duplicate label — clear it first.
+        if let Some(old) = self.app.get_webview_window(PROGRESS_LABEL) {
+            let _ = old.destroy();
+        }
+
+        // The WINDOW is the pill: opaque dark, rounded by the OS on macOS.
+        // (Webview `transparent` needs the macos-private-api feature — not
+        // worth it for a status display.)
+        let mut builder = tauri::WebviewWindowBuilder::new(
+            &self.app,
+            PROGRESS_LABEL,
+            tauri::WebviewUrl::App(format!("index.html#{PROGRESS_URL_FRAGMENT}").into()),
+        )
+        .title("FerriScribe OCR")
+        .decorations(false)
+        .background_color(tauri::window::Color(20, 20, 24, 255))
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .focused(false)
+        .inner_size(PROGRESS_WIDTH, PROGRESS_HEIGHT);
+
+        // Top-center of the primary monitor; fall back to the OS position
+        // when no primary is reported.
+        if let Ok(Some(monitor)) = self.app.primary_monitor() {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let (x, y) = indicator_position(pos.x, pos.y, size.width, monitor.scale_factor());
+            builder = builder.position(x, y);
+        }
+
+        let window = builder
+            .build()
+            .map_err(|e| format!("build progress window: {e}"))?;
+        // The pill is pure status display — pointer input passes through.
+        let _ = window.set_ignore_cursor_events(true);
+        self.shown = true;
+        Ok(())
+    }
+}
+
+impl Drop for ProgressIndicator {
+    fn drop(&mut self) {
+        if self.shown {
+            use tauri::Manager;
+            if let Some(window) = self.app.get_webview_window(PROGRESS_LABEL) {
+                let _ = window.destroy();
+            }
+        }
+    }
+}
+
 /// Outcome of a capture run, returned to the invoking UI.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CaptureOcrOutcome {
@@ -290,6 +387,12 @@ async fn capture_ocr_inner(
         }
         Err(e) => return Err(AppError::Other(format!("Screen capture failed: {e}"))),
     };
+
+    // Selection UIs have their own feedback, but the vision-model call is a
+    // silent multi-second (up to minutes) stretch with the app in the
+    // background — show the always-on-top pill until this function exits
+    // (RAII drop closes it on every path).
+    let _progress = ProgressIndicator::show(app);
 
     // Local vision model only — `ocr_image_bytes` routes through the same
     // provider stack as document OCR. No new network surface.
@@ -575,6 +678,30 @@ mod tests {
         let line = "Med list: aspirin";
         let raw = format!("{line}\n{line}\n```markdown\n{line}\n```\n```");
         assert_eq!(clean_ocr_text(&raw), line);
+    }
+
+    #[test]
+    fn indicator_position_centers_on_monitor_top() {
+        // 1920-wide monitor at origin, scale 1: pill centered, 24px down.
+        let (x, y) = indicator_position(0, 0, 1920, 1.0);
+        assert!((x - (1920.0 - PROGRESS_WIDTH) / 2.0).abs() < 0.01);
+        assert!((y - 24.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn indicator_position_handles_scaled_secondary_monitor() {
+        // Left-of-primary monitor at x=-2560, 2x scale (physical coords in,
+        // logical position out).
+        let (x, y) = indicator_position(-2560, 0, 2560, 2.0);
+        // Physical pill width 440 → centered: (-2560 + (2560-440)/2)/2.
+        assert!((x - (-2560.0 + (2560.0 - 440.0) / 2.0) / 2.0).abs() < 0.01);
+        assert!((y - 24.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn indicator_position_never_divides_by_zero() {
+        let (x, y) = indicator_position(0, 0, 1920, 0.0);
+        assert!(x.is_finite() && y.is_finite());
     }
 
     #[cfg(target_os = "macos")]

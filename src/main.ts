@@ -6,11 +6,17 @@ import { mount } from 'svelte';
 // must not import app.css or any store — it has to stay transparent and
 // featherweight, and the app's onboarding/recovery gates must never run for
 // a selection surface.
-if (window.location.hash === '#screen-region-overlay') {
+if (
+  window.location.hash === '#screen-region-overlay' ||
+  window.location.hash === '#ocr-progress'
+) {
   const { default: ScreenRegionOverlay } = await import(
     './lib/components/ScreenRegionOverlay.svelte'
   );
-  mount(ScreenRegionOverlay, {
+  const { default: OcrProgressIndicator } = await import(
+    './lib/components/OcrProgressIndicator.svelte'
+  );
+  mount(window.location.hash === '#ocr-progress' ? OcrProgressIndicator : ScreenRegionOverlay, {
     target: document.getElementById('app')!,
   });
 } else {
