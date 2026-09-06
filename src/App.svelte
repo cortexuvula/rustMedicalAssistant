@@ -35,6 +35,7 @@
   import { getSpellchecker } from './lib/components/rich_editor/spellcheck/spellchecker';
   import { requestSpellcheckRescan } from './lib/components/rich_editor/spellcheck/spellcheck_extension';
   import { captureRegionOcr, captureOutcomeMessage } from './lib/api/screenshotOcr';
+  import { formatError } from './lib/types/errors';
 
   // Pages
   import RecordTab from './lib/pages/RecordTab.svelte';
@@ -167,8 +168,11 @@
         toasts.add({ message, type: 'success', autoDismiss: true });
       }
     } catch (err) {
-      if (String(err).includes('already in progress')) return;
-      toasts.error(`Screenshot OCR failed: ${err}`);
+      // invoke rejections carry the serialized AppError struct — formatError
+      // pulls out the human message.
+      const msg = formatError(err);
+      if (msg.includes('already in progress')) return;
+      toasts.error(`Screenshot OCR failed: ${msg}`);
     }
   }
 
