@@ -117,7 +117,7 @@ fn emit_event(app: &tauri::AppHandle, payload: &ScreenshotOcrEvent) {
 
 /// Clean a vision model's OCR output before it lands on the clipboard.
 ///
-/// Some OCR-finetuned models (glm-observed with glm-ocr) echo the extracted
+/// Some OCR-finetuned models (observed with glm-ocr) echo the extracted
 /// text a second time inside a ```-fenced block and then pad the tail with
 /// dozens of bare ``` lines — unusable as pasted text. When the output
 /// contains any fenced block, prefer the text OUTSIDE the fences (the plain
@@ -130,39 +130,96 @@ fn emit_event(app: &tauri::AppHandle, payload: &ScreenshotOcrEvent) {
 /// text is the better default.
 fn clean_ocr_text(raw: &str) -> String {
     let trimmed = raw.trim();
-    if !trimmed.contains("```") {
-        return trimmed.to_string();
-    }
-    let mut outside: Vec<&str> = Vec::new();
-    let mut inside_first: Option<Vec<&str>> = None;
-    let mut in_fence = false;
-    for line in trimmed.lines() {
-        if line.trim_start().starts_with("```") {
-            if !in_fence && inside_first.is_none() {
-                inside_first = Some(Vec::new());
+    let unfenced = if !trimmed.contains("```") {
+        trimmed.to_string()
+    } else {
+        let mut outside: Vec<&str> = Vec::new();
+        let mut inside_first: Option<Vec<&str>> = None;
+        let mut in_fence = false;
+        for line in trimmed.lines() {
+            if line.trim_start().starts_with("```") {
+                if !in_fence && inside_first.is_none() {
+                    inside_first = Some(Vec::new());
+                }
+                in_fence = !in_fence;
+                continue;
             }
-            in_fence = !in_fence;
-            continue;
+            if in_fence {
+                if let Some(lines) = inside_first.as_mut() {
+                    lines.push(line);
+                }
+            } else {
+                outside.push(line);
+            }
         }
-        if in_fence {
-            if let Some(lines) = inside_first.as_mut() {
-                lines.push(line);
+        let outside_text = outside.join("\n").trim().to_string();
+        if !outside_text.is_empty() {
+            outside_text
+        } else if let Some(lines) = inside_first {
+            let inside = lines.join("\n").trim().to_string();
+            if !inside.is_empty() {
+                inside
+            } else {
+                trimmed.to_string()
             }
         } else {
-            outside.push(line);
+            trimmed.to_string()
         }
-    }
-    let outside_text = outside.join("\n").trim().to_string();
-    if !outside_text.is_empty() {
-        return outside_text;
-    }
-    if let Some(lines) = inside_first {
-        let inside = lines.join("\n").trim().to_string();
-        if !inside.is_empty() {
-            return inside;
+    };
+    // The echo isn't always fenced — glm-ocr sometimes repeats the whole
+    // selection as plain text (identical lines appended verbatim).
+    dedupe_exact_repeat(&unfenced)
+}
+
+fn is_separator_line(line: &str) -> bool {
+    let t = line.trim();
+    t.is_empty() || t.starts_with("```")
+}
+
+/// Collapse an exact whole-text repetition to a single copy: glm-ocr
+/// sometimes appends a verbatim copy of the entire extraction. A match
+/// requires the remainder after the first block to be EXACTLY one copy of
+/// it (separator/blank/fence lines aside) — so repeated content inside a
+/// larger document (a table row printed twice, a repeated form label) does
+/// NOT collapse, only whole-output echoes do.
+fn dedupe_exact_repeat(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut prefix_len = lines.len() / 2;
+    while prefix_len >= 1 {
+        let prefix = &lines[..prefix_len];
+        // The echoed block must carry content — never collapse to blank lines.
+        if prefix.iter().any(|l| !l.trim().is_empty()) {
+            let mut i = prefix_len;
+            while i < lines.len() && is_separator_line(lines[i]) {
+                i += 1;
+            }
+            let available = lines.len() - i;
+            let echo = &lines[i..];
+            // The echo must be the prefix verbatim (modulo line whitespace)
+            // and consume the remainder exactly.
+            if available == prefix_len
+                && prefix
+                    .iter()
+                    .zip(echo.iter())
+                    .all(|(a, b)| a.trim() == b.trim())
+            {
+                let mut start = 0;
+                let mut end = prefix.len();
+                while start < end && is_separator_line(prefix[start]) {
+                    start += 1;
+                }
+                while end > start && is_separator_line(prefix[end - 1]) {
+                    end -= 1;
+                }
+                let joined = prefix[start..end].join("\n");
+                if !joined.trim().is_empty() {
+                    return joined;
+                }
+            }
         }
+        prefix_len -= 1;
     }
-    trimmed.to_string()
+    text.to_string()
 }
 
 /// Region-capture → OCR → clipboard, callable from the frontend (Settings
@@ -480,6 +537,44 @@ mod tests {
     fn clean_ocr_text_falls_back_to_raw_when_fences_hold_nothing() {
         // Degenerate: fences but no text anywhere usable.
         assert_eq!(clean_ocr_text("```\n\n```\n```"), "```\n\n```\n```".trim());
+    }
+
+    #[test]
+    fn clean_ocr_text_collapses_plain_verbatim_echo() {
+        // The user's report (2026-09-06): glm-ocr repeated the whole
+        // selection as plain text, no fences involved.
+        let line = "AppError struct ( {kind, message} ),";
+        assert_eq!(clean_ocr_text(&format!("{line}\n{line}")), line);
+    }
+
+    #[test]
+    fn clean_ocr_text_collapses_multi_line_echo_with_blank_separator() {
+        let block = "HbA1c: 7.2 %\nBP: 128/76";
+        assert_eq!(clean_ocr_text(&format!("{block}\n\n{block}\n")), block);
+    }
+
+    #[test]
+    fn clean_ocr_text_keeps_repeated_line_inside_larger_document() {
+        // A repeated form label inside a longer (non-echo) extraction must
+        // NOT collapse — the echo must consume the ENTIRE remainder.
+        let doc = "Weight: 70 kg\nWeight: 70 kg\nHeight: 175 cm\nBP: 128/76";
+        assert_eq!(clean_ocr_text(doc), doc);
+    }
+
+    #[test]
+    fn clean_ocr_text_keeps_three_identical_rows() {
+        // Exact-two-copies rule: a 3x repeated row is content, not an echo.
+        let rows = "N/A\nN/A\nN/A";
+        assert_eq!(clean_ocr_text(rows), rows);
+    }
+
+    #[test]
+    fn clean_ocr_text_dedupe_runs_after_fence_unwrap() {
+        // Fenced echo where the OUTSIDE text itself is echoed: fence stage
+        // yields the doubled plain text, dedupe then collapses it.
+        let line = "Med list: aspirin";
+        let raw = format!("{line}\n{line}\n```markdown\n{line}\n```\n```");
+        assert_eq!(clean_ocr_text(&raw), line);
     }
 
     #[cfg(target_os = "macos")]
