@@ -115,6 +115,56 @@ fn emit_event(app: &tauri::AppHandle, payload: &ScreenshotOcrEvent) {
     }
 }
 
+/// Clean a vision model's OCR output before it lands on the clipboard.
+///
+/// Some OCR-finetuned models (glm-observed with glm-ocr) echo the extracted
+/// text a second time inside a ```-fenced block and then pad the tail with
+/// dozens of bare ``` lines — unusable as pasted text. When the output
+/// contains any fenced block, prefer the text OUTSIDE the fences (the plain
+/// extraction); when everything is fenced, take the inside of the first
+/// block. Fence-free output passes through untouched, so well-behaved models
+/// are unaffected.
+///
+/// Trade-off: a screenshot OF markdown source (where fences are content)
+/// loses its fenced sections. For a quick-capture-to-clipboard tool, clean
+/// text is the better default.
+fn clean_ocr_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if !trimmed.contains("```") {
+        return trimmed.to_string();
+    }
+    let mut outside: Vec<&str> = Vec::new();
+    let mut inside_first: Option<Vec<&str>> = None;
+    let mut in_fence = false;
+    for line in trimmed.lines() {
+        if line.trim_start().starts_with("```") {
+            if !in_fence && inside_first.is_none() {
+                inside_first = Some(Vec::new());
+            }
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            if let Some(lines) = inside_first.as_mut() {
+                lines.push(line);
+            }
+        } else {
+            outside.push(line);
+        }
+    }
+    let outside_text = outside.join("\n").trim().to_string();
+    if !outside_text.is_empty() {
+        return outside_text;
+    }
+    if let Some(lines) = inside_first {
+        let inside = lines.join("\n").trim().to_string();
+        if !inside.is_empty() {
+            return inside;
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Region-capture → OCR → clipboard, callable from the frontend (Settings
 /// button, in-app shortcut).
 #[tauri::command]
@@ -190,7 +240,7 @@ async fn capture_ocr_inner(
         .await
         .map_err(|e| AppError::Other(format!("OCR failed: {e}")))?;
 
-    let text = text.trim().to_string();
+    let text = clean_ocr_text(&text);
     if text.is_empty() {
         return Ok(CaptureOcrOutcome {
             status: "empty",
@@ -402,6 +452,34 @@ mod tests {
         .unwrap();
         assert!(json.contains("\"status\":\"copied\""));
         assert!(json.contains("\"chars\":42"));
+    }
+
+    #[test]
+    fn clean_ocr_text_passes_fence_free_output_through() {
+        assert_eq!(clean_ocr_text("  HbA1c 7.2 %  "), "HbA1c 7.2 %");
+        assert_eq!(clean_ocr_text("line one\nline two\n"), "line one\nline two");
+        assert_eq!(clean_ocr_text("   "), "");
+    }
+
+    #[test]
+    fn clean_ocr_text_strips_glm_ocr_echo_and_fence_tail() {
+        // The exact shape glm-ocr produced in the live dry-run (2026-09-06):
+        // clean extraction, then a fenced duplicate, then dozens of bare
+        // fences (elided here to a few).
+        let raw = "HbA1c 7.2 %\n\nNext review: 3 months\n```markdown\n\nHbA1c 7.2 %\n\nNext review: 3 months\n```\n```\n```\n```\n       \n```";
+        assert_eq!(clean_ocr_text(raw), "HbA1c 7.2 %\n\nNext review: 3 months");
+    }
+
+    #[test]
+    fn clean_ocr_text_unwraps_fully_fenced_output() {
+        let raw = "```markdown\nHbA1c 7.2 %\n```\n```";
+        assert_eq!(clean_ocr_text(raw), "HbA1c 7.2 %");
+    }
+
+    #[test]
+    fn clean_ocr_text_falls_back_to_raw_when_fences_hold_nothing() {
+        // Degenerate: fences but no text anywhere usable.
+        assert_eq!(clean_ocr_text("```\n\n```\n```"), "```\n\n```\n```".trim());
     }
 
     #[cfg(target_os = "macos")]
