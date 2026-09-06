@@ -122,7 +122,17 @@ pub async fn capture_region_ocr(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<CaptureOcrOutcome> {
-    run_capture_ocr(&app, &state).await
+    // The hotkey path (trigger_capture) logs its own failures; log here too
+    // so command-path failures (provider down, model errors) are never
+    // silent in the app log — the frontend toast alone isn't diagnosable
+    // after the fact.
+    match run_capture_ocr(&app, &state).await {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            tracing::warn!(error = %e, "screenshot OCR command failed");
+            Err(e)
+        }
+    }
 }
 
 /// The shared flow behind every trigger (command invoke, global hotkey,
